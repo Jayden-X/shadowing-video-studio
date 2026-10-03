@@ -1,7 +1,7 @@
 # 009 — Upload and reuse local visual assets
 
 Priority: P2  
-Status: review — owner browser acceptance pending
+Status: done — owner browser acceptance passed on 2026-10-04
 
 ## Goal
 
@@ -100,7 +100,7 @@ generation flow.
       available and visually behaves as it does today.
 - [x] Focused API/filesystem/UI tests cover upload, selection, restart/reuse, missing-file
       and upload errors, and no-overwrite behavior while retaining the existing tests.
-- [ ] The owner accepts the target-Mac browser upload/select/export workflow. Automated
+- [x] The owner accepts the target-Mac browser upload/select/export workflow. Automated
       checks and genuine media evidence support the criteria above; they do not replace
       this requested browser acceptance.
 
@@ -132,8 +132,7 @@ No unresolved scope/runtime decisions for implementation. The owner authorized a
 folder resource library; ADR 0003 records the small JSON storage format and initial
 layout choices. Backgrounds cover the frame under a readability dim layer; illustrations
 fit without cropping in the existing right panel for the full sentence page. Missing or
-changed images require explicit reselection/upload and preserve text/audio. The owner
-will perform target-Mac browser acceptance once the updated service is available.
+changed images require explicit reselection/upload and preserve text/audio. The owner confirmed target-Mac background/illustration acceptance on 2026-10-04.
 
 ## Standards affected
 
@@ -174,6 +173,7 @@ validation and safe failed-attempt storage accounting, based on the real Mac fai
   Preview returned 206, download returned an attachment, and complete decode passed.
 - GPT-6 Luna/max accepted the finite-frame, color and CFR corrections. All nine selected
   backend production files are covered; no Blocker/Required remains in that scope.
-- PR #10 is a draft. Initial CI passed; the final revision must pass before squash.
-  The service remains on loopback port 8877. Owner browser acceptance is pending.
+- Owner background/illustration acceptance passed on 2026-10-04. Final code revision
+  `9fc622d` passed CI run `37156949815`; PR #10 is ready for squash integration.
+  The service remains on loopback port 8877.
 - TTS voice selection remains P2 Task 010. Restart audio reuse remains P3 Task 008.

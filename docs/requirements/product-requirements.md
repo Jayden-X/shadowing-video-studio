@@ -155,7 +155,7 @@ baseline. Priority labels describe delivery order, independently of roadmap phas
   boundary. The first implementation covers user-uploaded images and does not implement an
   AI image provider, credentials, automatic generation, or model selection.
 
-See [Task 009](../../tasks/review/009-local-visual-library.md) for acceptance and design decisions.
+See [Task 009](../../tasks/done/009-local-visual-library.md) for acceptance and design decisions.
 
 ### P2 — TTS voice selection
 

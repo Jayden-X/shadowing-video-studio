@@ -47,7 +47,7 @@ the corresponding task is ready and any required design decisions are confirmed.
 
 | Priority | Follow-up | Task |
 | --- | --- | --- |
-| P2 | UI upload, local folder library and selection of video backgrounds / sentence illustrations | [009](../../tasks/review/009-local-visual-library.md) |
+| P2 | UI upload, local folder library and selection of video backgrounds / sentence illustrations | [009](../../tasks/done/009-local-visual-library.md) |
 | P2 | UI list and selection of voices supported by the local TTS runtime | [010](../../tasks/backlog/010-tts-voice-selection.md) |
 | P3 | Frontend-cached association keys and validated local audio reuse across restart | [008](../../tasks/backlog/008-restart-audio-reuse.md) |
 
