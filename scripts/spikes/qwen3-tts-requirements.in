@@ -1,0 +1,4 @@
+# Experimental runtime only; normal application/CI dependencies are unchanged.
+qwen-tts==0.1.1
+torch==2.10.0
+torchaudio==2.10.0

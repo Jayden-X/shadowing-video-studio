@@ -65,14 +65,19 @@ jobs:
       - name: Install backend dependencies
         run: uv sync --extra dev
 
-      - name: Ruff lint
-        run: uv run ruff check .
+      - name: Ruff lint (backend and spikes)
+        run: uv run ruff check --config pyproject.toml . ../scripts/spikes
 
-      - name: Ruff format
-        run: uv run ruff format --check .
+      - name: Ruff format (backend and spikes)
+        run: uv run ruff format --check --config pyproject.toml . ../scripts/spikes
 
       - name: Pytest
         run: uv run pytest
+
+      - name: Spike shell syntax and deterministic helpers
+        run: |
+          bash -n ../scripts/spikes/qwen3_tts_macos.sh
+          uv run python -m unittest discover -s ../scripts/spikes -p 'test_*.py' -v
 
   frontend:
     runs-on: ubuntu-latest
