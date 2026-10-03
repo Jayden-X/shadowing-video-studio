@@ -121,7 +121,17 @@ cp .env.example .env
 
 Never commit `.env`.
 
-Provider authentication details are finalized only when the corresponding adapter is implemented.
+`bash scripts/dev.sh` loads the root `.env` when present. Already exported environment variables take precedence. For a separately started API, add `--env-file ../.env` to `uv run` when that file exists.
+
+For DeepSeek, set `DEEPSEEK_API_KEY` and optionally `DEEPSEEK_MODEL` (default `deepseek-flash`). Only the backend reads the key and contacts the fixed official HTTPS endpoint. A provider is selected explicitly in the UI before sending dialogue.
+
+For Codex, install a current CLI and run `codex login` locally. The adapter reuses this login and checks the CLI's isolation capabilities. It runs in an isolated system temporary directory with repository/user configuration and unnecessary tools disabled. An unsupported or unverifiable configuration makes the provider unavailable instead of weakening these controls. `CODEX_EXECUTABLE` can select a server-side executable; no Codex API key is required.
+
+On 2026-10-03, the local Windows CLI 0.160.0 kept `unified_exec` enabled despite disable/configuration overrides. The adapter correctly reported it unavailable and no live Codex inference was attempted. A successful login alone does not establish safe readiness; another installation must pass the same checks. Raw CLI output/configuration is never displayed or logged by the adapter.
+
+`TEXT_PROVIDER_TIMEOUT_SECONDS` sets the preparation deadline (default 60, range 1–110). Requests are never automatically retried. AI proposals must be reviewed and applied explicitly; provider errors or discarded proposals preserve source and existing edits. Preparation is limited to 20,000 source UTF-16 code units, 500 proposed sentences, and 4,000 UTF-16 code units per sentence before trimming. Isolated Unicode surrogates are rejected. Provider output is bounded to 128 KiB.
+
+Normal checks use fake providers and fixtures. They do not require provider credentials, paid API calls, or model downloads. Real provider access must be validated locally with synthetic dialogue; record it separately from contract-test results.
 
 ## Generated/runtime data
 

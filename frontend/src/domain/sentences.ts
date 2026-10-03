@@ -13,6 +13,15 @@ export type SentenceDocument = {
 
 export type MoveDirection = "up" | "down";
 
+export const MAX_SOURCE_LENGTH = 20_000;
+export const MAX_PROPOSAL_SENTENCES = 500;
+export const MAX_SENTENCE_LENGTH = 4_000;
+
+export function isWellFormedText(value: string): boolean {
+  // Limits use UTF-16 code units on both API sides; complete surrogate pairs are valid.
+  return !/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(value);
+}
+
 function createSentenceId(sequence: number): SentenceId {
   return `sentence-${String(sequence).padStart(3, "0")}`;
 }
@@ -53,6 +62,30 @@ export function createSentenceDocument(sourceText: string): SentenceDocument {
     sentences,
     nextSequence: sentences.length + 1,
   };
+}
+
+export function createSentenceDocumentFromProposal(
+  sourceText: string,
+  sentenceTexts: readonly string[],
+): SentenceDocument {
+  if (!sourceText.trim() || sourceText.length > MAX_SOURCE_LENGTH) {
+    throw new Error("Source dialogue must contain 1–20,000 characters.");
+  }
+  if (!isWellFormedText(sourceText)) {
+    throw new Error("Source dialogue contains invalid Unicode characters.");
+  }
+  if (sentenceTexts.length === 0 || sentenceTexts.length > MAX_PROPOSAL_SENTENCES) {
+    throw new Error("A proposal must contain 1–500 sentences.");
+  }
+
+  const sentences = sentenceTexts.map((text, index) => {
+    if (!text.trim() || text.length > MAX_SENTENCE_LENGTH || !isWellFormedText(text)) {
+      throw new Error("Proposed sentences must contain 1–4,000 characters.");
+    }
+    return { id: createSentenceId(index + 1), text: text.trim() };
+  });
+
+  return { sourceText, sentences, nextSequence: sentences.length + 1 };
 }
 
 export function updateSentenceText(

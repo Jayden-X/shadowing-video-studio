@@ -8,7 +8,7 @@
 
 * { box-sizing: border-box; }
 body { margin: 0; min-width: 320px; min-height: 100vh; }
-button, input, textarea { font: inherit; }
+button, input, textarea, select { font: inherit; }
 button, summary { cursor: pointer; }
 button {
   min-height: 40px;
@@ -22,7 +22,7 @@ button {
 }
 button:hover:not(:disabled) { background: #edf4ef; border-color: #92af9f; }
 button:disabled { opacity: 0.45; cursor: not-allowed; }
-button:focus-visible, textarea:focus-visible, summary:focus-visible {
+button:focus-visible, textarea:focus-visible, select:focus-visible, input:focus-visible, summary:focus-visible {
   outline: 3px solid #85b5a0;
   outline-offset: 3px;
 }
@@ -38,6 +38,8 @@ textarea {
 }
 textarea:disabled { background: #f5f6f3; }
 textarea::placeholder { color: #8b968f; }
+select { width: 100%; min-height: 42px; padding: 8px 10px; color: #26382f; border: 1px solid #d3ddd6; border-radius: 8px; background: #fff; }
+select:disabled { background: #f5f6f3; opacity: 0.7; cursor: not-allowed; }
 h1, h2, h3, p { margin: 0; }
 h1 { font-size: clamp(29px, 4vw, 42px); letter-spacing: -0.045em; line-height: 1.2; }
 h2 { font-size: 19px; letter-spacing: -0.025em; }
@@ -64,6 +66,18 @@ label { display: block; margin-bottom: 8px; font-size: 13px; font-weight: 600; }
 .primary-button { background: #315d48; border-color: #315d48; color: #fff; }
 .primary-button:hover:not(:disabled) { background: #244936; border-color: #244936; }
 .prepare-button { width: 100%; margin-top: 20px; font-size: 14px; }
+.preparation-mode { display: flex; flex-wrap: wrap; gap: 16px; margin: 0 0 22px; padding: 14px; border: 1px solid #dfe6de; border-radius: 10px; }
+.preparation-mode legend { padding: 0 5px; font-size: 12px; font-weight: 600; color: #617367; }
+.preparation-mode label { display: flex; align-items: center; gap: 7px; margin: 0; }
+.preparation-mode input { accent-color: #315d48; }
+.preparation-mode:disabled { opacity: 0.7; }
+.provider-field { margin-bottom: 22px; }
+.pending-preparation { margin-top: 12px; }
+.pending-preparation button { margin-top: 10px; }
+.input-error { margin-top: 12px; color: #965d50; font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
+.proposal-review { padding: 20px; margin-top: 20px; border: 1px solid #92af9f; border-radius: 12px; background: #f1f7f1; }
+.proposal-list { display: grid; gap: 10px; margin: 18px 0; padding-left: 24px; font-size: 14px; line-height: 1.7; overflow-wrap: anywhere; white-space: pre-wrap; }
+.proposal-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .source-snapshot { margin-top: 24px; border-top: 1px solid #e6ebe5; padding-top: 18px; }
 .source-snapshot summary { font-size: 13px; font-weight: 600; }
 .source-snapshot pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; font-size: 13px; line-height: 1.7; background: #f4f6f1; padding: 14px; border-radius: 8px; }

@@ -2,14 +2,67 @@ import { describe, expect, it } from "vitest";
 
 import {
   createSentenceDocument,
+  createSentenceDocumentFromProposal,
   deleteSentence,
   insertSentenceAfter,
+  isWellFormedText,
   mergeWithPrevious,
   moveSentence,
   splitSentence,
   splitSourceText,
   updateSentenceText,
 } from "./sentences";
+
+describe("reviewed sentence proposals", () => {
+  it("accepts complete emoji pairs and rejects isolated Unicode surrogates", () => {
+    expect(isWellFormedText("Hello 👋. 中文。" )).toBe(true);
+    for (const value of ["\uD800", "\uDC00", "a\uD800b", "\uD800\uD800", "\uDC00\uDC00"]) {
+      expect(isWellFormedText(value)).toBe(false);
+      expect(() => createSentenceDocumentFromProposal(value, ["Sentence."])).toThrow("Unicode");
+      expect(() => createSentenceDocumentFromProposal("Source.", [value])).toThrow();
+    }
+    const document = createSentenceDocumentFromProposal("Hello 👋.", [" Hi 👋. "]);
+    expect(document.sourceText).toBe("Hello 👋.");
+    expect(document.sentences[0].text).toBe("Hi 👋.");
+  });
+
+  it("counts supplementary characters as two UTF-16 units before trimming", () => {
+    expect(() => createSentenceDocumentFromProposal("👋".repeat(10_001), ["Hi."])).toThrow();
+    expect(() => createSentenceDocumentFromProposal("Source.", ["👋".repeat(2_001)])).toThrow();
+    expect(() => createSentenceDocumentFromProposal("Source.", [" " + "x".repeat(4_000)])).toThrow();
+    expect(createSentenceDocumentFromProposal("👋".repeat(10_000), ["👋".repeat(2_000)]).sentences).toHaveLength(1);
+  });
+
+  it("creates application identities and preserves source and provider-independent ordering", () => {
+    const source = "  Original dialogue.\r\nKeep it exactly. ";
+    const proposal = [" A revised sentence. ", "Another sentence?"];
+    const document = createSentenceDocumentFromProposal(source, proposal);
+
+    expect(document).toEqual({
+      sourceText: source,
+      sentences: [
+        { id: "sentence-001", text: "A revised sentence." },
+        { id: "sentence-002", text: "Another sentence?" },
+      ],
+      nextSequence: 3,
+    });
+    expect(proposal).toEqual([" A revised sentence. ", "Another sentence?"]);
+    expect(createSentenceDocumentFromProposal(source, proposal)).toEqual(document);
+    const edited = updateSentenceText(document, "sentence-001", "My correction.");
+    expect(edited.sourceText).toBe(source);
+    expect(edited.sentences[0].id).toBe("sentence-001");
+    expect(insertSentenceAfter(edited, null).sentences[2].id).toBe("sentence-003");
+  });
+
+  it("rejects empty and oversized proposals before creating a canonical document", () => {
+    expect(() => createSentenceDocumentFromProposal("Source.", [])).toThrow("1–500");
+    expect(() => createSentenceDocumentFromProposal("Source.", ["  "])).toThrow("1–4,000");
+    expect(() => createSentenceDocumentFromProposal("Source.", ["x".repeat(4_001)])).toThrow("1–4,000");
+    expect(() => createSentenceDocumentFromProposal("Source.", Array(501).fill("Sentence."))).toThrow("1–500");
+    expect(() => createSentenceDocumentFromProposal(" ", ["Sentence."])).toThrow("1–20,000");
+    expect(() => createSentenceDocumentFromProposal("x".repeat(20_001), ["Sentence."])).toThrow("1–20,000");
+  });
+});
 
 describe("splitSourceText", () => {
   it("splits by punctuation and line boundaries deterministically", () => {

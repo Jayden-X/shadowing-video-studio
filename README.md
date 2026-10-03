@@ -8,7 +8,7 @@ The project turns an English dialogue into a repeatable shadowing-video workflow
 
 ## Current status
 
-The local application shell and manual sentence editor are available. The MVP is intentionally small, while the architecture leaves explicit extension seams for later capabilities.
+The local application shell, manual sentence editor, and AI sentence proposals are available. The MVP is intentionally small, while the architecture leaves explicit extension seams for later capabilities.
 
 ### Confirmed MVP boundaries
 
@@ -32,9 +32,9 @@ The local application shell and manual sentence editor are available. The MVP is
 Text preparation has two modes:
 
 1. **Manual (available)** — paste dialogue, prepare a local sentence list, then edit, split at the cursor, merge adjacent sentences, add, delete, and reorder sentences. The original source snapshot stays separate from edits. Replacing a prepared list requires confirmation.
-2. **AI-assisted (planned)** — let an AI provider prepare the sentence list, then require user confirmation before media generation.
+2. **AI-assisted** — explicitly select a configured DeepSeek or locally logged-in Codex CLI provider, prepare a proposal, then review and apply it. Discard/failure preserves the current document. Accepted sentences use the same manual editor.
 
-Initial AI-provider targets: **DeepSeek** and **Codex**, behind a provider abstraction.
+**DeepSeek** and the **Codex CLI** sit behind a replaceable provider abstraction. See [provider setup](docs/development/setup.md#environment-configuration). Credentials remain in the backend/local CLI, and AI preparation is limited to 20,000 source characters.
 
 The manual editor works without the backend, AI, TTS, or FFmpeg. Splitting uses simple punctuation/newline rules; abbreviations and decimals may need manual correction. Work is held in the current browser session and is lost on refresh or closing the tab. Speech and video generation are not implemented yet.
 
