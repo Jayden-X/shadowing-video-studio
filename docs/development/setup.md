@@ -9,7 +9,7 @@ Required:
 - uv.
 - Node.js 22.12+.
 - npm.
-- FFmpeg.
+- A FFmpeg build with `drawtext`, `showwaves`, `libx264` and AAC (see video runtime setup).
 
 The repository contains `.python-version` and `.nvmrc` as local tool hints.
 
@@ -18,8 +18,13 @@ The repository contains `.python-version` and `.nvmrc` as local tool hints.
 With Homebrew:
 
 ```bash
-brew install uv ffmpeg node
+brew install uv ffmpeg-full node
 ```
+
+Homebrew's regular `ffmpeg` build may omit `drawtext`. `ffmpeg-full` is keg-only;
+configure `VIDEO_FFMPEG_EXECUTABLE` and `VIDEO_FFPROBE_EXECUTABLE` with the absolute
+paths under `brew --prefix ffmpeg-full`, or reuse an existing complete build.
+See [video runtime](video-runtime.md) for configuration and capability readiness.
 
 If you manage Node with nvm instead, use a Node release satisfying Vite 8's requirement (22.12+ is sufficient for this project baseline).
 
