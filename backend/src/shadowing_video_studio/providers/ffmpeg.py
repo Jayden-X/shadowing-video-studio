@@ -210,8 +210,9 @@ def page_arguments(
         )
     background_graph = (
         "[1:v]scale=w=1920:h=1080:force_original_aspect_ratio=increase:out_range=tv,"
-        "crop=w=1920:h=1080,setsar=1,format=yuv420p,"
+        "crop=w=1920:h=1080,setsar=1,format=rgb24,"
         "drawbox=x=0:y=0:w=iw:h=ih:color=black@0.60:t=fill,"
+        "format=yuv420p,"
         f"loop=loop={page.frame_count - 1}:size=1:start=0,setpts=N/(30*TB)[background];"
         if background_filename is not None
         else f"color=c=0x101b2d:s=1920x1080:r=30:d={duration}[background];"
@@ -321,6 +322,11 @@ def concat_arguments(
         "0:a:0",
         "-c:v",
         "copy",
+        "-bsf:v",
+        f"setts=pts=round(PTS*TB*{FRAME_RATE}):dts=round(DTS*TB*{FRAME_RATE}):"
+        f"duration=1:time_base=1/{FRAME_RATE}",
+        "-video_track_timescale",
+        str(FRAME_RATE * 1000),
         "-c:a",
         "aac",
         "-b:a",
@@ -345,6 +351,9 @@ def validate_video_metadata(payload: dict, expected_seconds: float) -> float:
         audio = [item for item in payload["streams"] if item["codec_type"] == "audio"]
         duration = float(payload["format"]["duration"])
         frame_rate = video[0]["avg_frame_rate"].split("/")
+        nominal_rate = video[0]["r_frame_rate"].split("/")
+        expected_frames = round(expected_seconds * FRAME_RATE)
+        video_seconds = float(video[0]["duration"])
         if (
             len(video) != 1
             or len(audio) != 1
@@ -356,6 +365,10 @@ def validate_video_metadata(payload: dict, expected_seconds: float) -> float:
             or audio[0]["sample_rate"] != "48000"
             or audio[0]["channels"] != 1
             or float(frame_rate[0]) / float(frame_rate[1]) != FRAME_RATE
+            or float(nominal_rate[0]) / float(nominal_rate[1]) != FRAME_RATE
+            or int(video[0]["nb_frames"]) != expected_frames
+            or not math.isfinite(video_seconds)
+            or abs(video_seconds - expected_frames / FRAME_RATE) > 0.001
             or not math.isfinite(duration)
             or abs(duration - expected_seconds) > 0.25
         ):
@@ -588,7 +601,13 @@ class FfmpegVideoRenderer:
             extension = VISUAL_EXTENSIONS[asset.mime_type]
             filename = f"visual-{len(visuals) + 1:04d}.{extension}"
             visuals[asset.id] = (asset, content, filename)
-        manifest = "".join(f"file 'page-{index:04d}.mkv'\n" for index in range(1, len(pages) + 1))
+        # Millisecond MKV header durations can accumulate drift across pages. Frozen
+        # frame-grid durations set concat offsets; setts restores each packet's grid
+        # while preserving separate PTS/DTS and therefore H264 B-frame ordering.
+        manifest = "".join(
+            f"file 'page-{index:04d}.mkv'\nduration {page.duration_seconds:.9f}\n"
+            for index, page in enumerate(pages, 1)
+        )
         baseline = (
             font_bytes
             + sum(source_bytes)

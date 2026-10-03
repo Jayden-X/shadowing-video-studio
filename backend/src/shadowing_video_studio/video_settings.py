@@ -38,6 +38,7 @@ REQUIRED_FILTERS = frozenset(
 )
 REQUIRED_ENCODERS = frozenset({"libx264", "pcm_s16le", "aac"})
 REQUIRED_MUXERS = frozenset({"mp4", "matroska"})
+REQUIRED_BITSTREAM_FILTERS = frozenset({"setts"})
 REQUIRED_DRAWTEXT_OPTIONS = frozenset(
     {"fontfile", "textfile", "expansion", "fontsize", "fontcolor", "x", "y", "line_spacing"}
 )
@@ -112,6 +113,7 @@ class VideoToolPreflight:
                         ("-filters", REQUIRED_FILTERS, "filters"),
                         ("-encoders", REQUIRED_ENCODERS, "encoders"),
                         ("-muxers", REQUIRED_MUXERS, "muxers"),
+                        ("-bsfs", REQUIRED_BITSTREAM_FILTERS, "bitstream filters"),
                     ):
                         result = await self.runner.run(
                             [str(ffmpeg), "-nostdin", "-hide_banner", option],
@@ -125,7 +127,12 @@ class VideoToolPreflight:
                                 "FFmpeg and ffprobe executables.",
                                 "unavailable",
                             )
-                        missing = required - _listed_names(result.stdout)
+                        listed = (
+                            set(result.stdout.decode("utf-8").splitlines())
+                            if option == "-bsfs"
+                            else _listed_names(result.stdout)
+                        )
+                        missing = required - listed
                         if missing:
                             raise VideoRenderingError(
                                 f"Required FFmpeg {kind} are missing "

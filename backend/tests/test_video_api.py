@@ -20,6 +20,7 @@ from shadowing_video_studio.video_rendering import (
     video_timeline,
 )
 from shadowing_video_studio.video_settings import (
+    REQUIRED_BITSTREAM_FILTERS,
     REQUIRED_DRAWTEXT_OPTIONS,
     REQUIRED_ENCODERS,
     REQUIRED_FILTERS,
@@ -51,6 +52,8 @@ class FakeCapabilityRunner:
                     f" {option} <string> ..FV....... synthetic" for option in options
                 ).encode(),
             )
+        if arguments[-1] == "-bsfs":
+            return ProcessResult(0, "\n".join(sorted(REQUIRED_BITSTREAM_FILTERS)).encode())
         options = {
             "-filters": ("...", REQUIRED_FILTERS),
             "-encoders": ("V.....", REQUIRED_ENCODERS),

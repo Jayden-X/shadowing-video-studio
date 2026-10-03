@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import json
+import math
 import os
 import struct
 from pathlib import Path
@@ -70,7 +71,10 @@ def video_metadata(duration=6):
                 "width": 1920,
                 "height": 1080,
                 "avg_frame_rate": "30/1",
+                "r_frame_rate": "30/1",
                 "pix_fmt": "yuv420p",
+                "nb_frames": str(round(duration * 30)) if math.isfinite(duration) else "180",
+                "duration": str(duration),
             },
             {"codec_type": "audio", "codec_name": "aac", "sample_rate": "48000", "channels": 1},
         ],
@@ -177,6 +181,10 @@ def test_commands_use_fixed_relative_files_and_no_source_interpolation():
     final = concat_arguments(Path("/configured/ffmpeg"))
     assert final[final.index("-c:a") + 1] == "aac"
     assert final[final.index("-safe") + 1] == "1"
+    assert final[final.index("-bsf:v") + 1] == (
+        "setts=pts=round(PTS*TB*30):dts=round(DTS*TB*30):duration=1:time_base=1/30"
+    )
+    assert final[final.index("-video_track_timescale") + 1] == "30000"
     assert 0 < int(final[final.index("-fs") + 1]) < 128 * 1024 * 1024
 
 
@@ -214,7 +222,9 @@ def test_render_preserves_originals_uses_fresh_directory_and_reports_progress(tm
     assert progress == [(1, 2), (2, 2)]
     assert sentence.audio_path.read_bytes() == original
     assert " ".join((job / "page-0001.txt").read_text(encoding="utf-8").split()) == sentence.text
-    assert (job / "pages.txt").read_text() == "file 'page-0001.mkv'\nfile 'page-0002.mkv'\n"
+    assert (job / "pages.txt").read_text() == (
+        "file 'page-0001.mkv'\nduration 6.000000000\nfile 'page-0002.mkv'\nduration 6.000000000\n"
+    )
     for arguments, options in runner.calls:
         assert options["cwd"] == job and options["timeout"] == 600
         assert "shell" not in options
@@ -258,6 +268,9 @@ def test_selected_images_are_frozen_checked_and_use_contain_cover_graph(tmp_path
         assert "private" not in graph and "private" not in " ".join(arguments)
         assert "force_original_aspect_ratio=increase" in graph and "crop=w=1920:h=1080" in graph
         assert "color=black@0.60" in graph and "force_original_aspect_ratio=decrease" in graph
+        assert (
+            "format=rgb24,drawbox=x=0:y=0:w=iw:h=ih:color=black@0.60:t=fill,format=yuv420p" in graph
+        )
         assert "x=1240+(584-overlay_w)/2" in graph and "apad=pad_dur=5" in graph
         assert "out_range=tv" in graph and "loop=loop=179:size=1:start=0" in graph
         assert "setpts=N/(30*TB)" in graph and "eof_action=repeat:shortest=0" in graph
@@ -352,3 +365,18 @@ def test_output_metadata_rejects_codec_resolution_and_frame_rate():
         payload["streams"][0][field] = value
         with pytest.raises(VideoRenderingError):
             validate_video_metadata(payload, 6)
+
+
+def test_frame_grid_rejects_millisecond_copy_rate_and_missing_frozen_frame():
+    expected = 505 / 30
+    payload = video_metadata(expected)
+    payload["format"]["duration"] = "16.833333"
+    payload["streams"][0]["duration"] = "16.833333"
+    assert validate_video_metadata(payload, expected) == 16.833333
+    payload["streams"][0]["avg_frame_rate"] = "505000/16833"
+    with pytest.raises(VideoRenderingError):
+        validate_video_metadata(payload, expected)
+    payload["streams"][0]["avg_frame_rate"] = "30/1"
+    payload["streams"][0]["nb_frames"] = "504"
+    with pytest.raises(VideoRenderingError):
+        validate_video_metadata(payload, expected)

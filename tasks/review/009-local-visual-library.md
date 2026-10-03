@@ -1,7 +1,7 @@
 # 009 — Upload and reuse local visual assets
 
 Priority: P2  
-Status: in progress
+Status: review — owner browser acceptance pending
 
 ## Goal
 
@@ -80,26 +80,29 @@ generation flow.
 
 ## Acceptance criteria
 
-- [ ] A user can upload a valid image, see its preview/name in the library, and select
+- [x] A user can upload a valid image, see its preview/name in the library, and select
       it as the video background or as a sentence illustration.
-- [ ] After a service restart, existing library items remain listed and can be selected
+- [x] After a service restart, existing library items remain listed and can be selected
       again with unchanged asset identity and bytes.
-- [ ] Invalid, corrupt, unsupported, or oversized images produce a safe error, create no
+- [x] Invalid, corrupt, unsupported, or oversized images produce a safe error, create no
       usable partial asset, and leave current sentence/audio/visual selections intact.
-- [ ] Uploading or assigning another image never overwrites an existing asset; existing
+- [x] Uploading or assigning another image never overwrites an existing asset; existing
       assets are not automatically removed. No client-provided path is read by the server.
-- [ ] A missing stored file is surfaced as unavailable and prevents FFmpeg from starting;
+- [x] A missing stored file is surfaced as unavailable and prevents FFmpeg from starting;
       after explicit re-upload or reselection, rendering can proceed without rebuilding
       speech or losing edited sentences.
-- [ ] A render uses its frozen video background and sentence-ID illustration bindings;
+- [x] A render uses its frozen video background and sentence-ID illustration bindings;
       each illustration remains visible for its sentence's full speech and five-second
       pause, with page timing still matching the frozen audio and pause.
-- [ ] Reordering and ordinary text edits retain sentence illustration bindings. The
+- [x] Reordering and ordinary text edits retain sentence illustration bindings. The
       split/merge/delete rules are explicit and covered by focused tests.
-- [ ] With no selected images, the existing fixed-template video workflow remains
+- [x] With no selected images, the existing fixed-template video workflow remains
       available and visually behaves as it does today.
-- [ ] Focused API/filesystem/UI tests cover upload, selection, restart/reuse, missing-file
+- [x] Focused API/filesystem/UI tests cover upload, selection, restart/reuse, missing-file
       and upload errors, and no-overwrite behavior while retaining the existing tests.
+- [ ] The owner accepts the target-Mac browser upload/select/export workflow. Automated
+      checks and genuine media evidence support the criteria above; they do not replace
+      this requested browser acceptance.
 
 ## Out of scope
 
@@ -144,7 +147,7 @@ validation and safe failed-attempt storage accounting, based on the real Mac fai
   toward the existing attempt budget. Omitted images preserve previous behavior.
 - Frontend implementation delegated to GPT-6 Luna/max. Backend critical review uses
   GPT-6 Luna/max and OCR deterministic delegation; frontend/test files excluded.
-- Initial backend checks passed: 181 tests, three Windows symlink permission skips,
+- Final backend checks passed: 182 tests, three Windows symlink permission skips,
   Ruff and existing spike helpers. Normal frontend typecheck, 158 tests and production
   build passed; no checks were removed or weakened.
 - GPT-6 Luna/max covered all nine selected backend production files. Its Required
@@ -152,8 +155,25 @@ validation and safe failed-attempt storage accounting, based on the real Mac fai
   charges actual retained bytes; unreadable/unsafe attempts retain their full reservation.
   The focused existing failure scenario verifies four failures followed by successful
   explicit retry while preserving evidence. The reviewer accepted this narrow correction.
-- Real Mac PNG/JPEG/WebP import and library re-instantiation passed. Actual image
-  rendering exposed process memory/tail-frame/color-range problems; corrections and
-  final media validation remain pending. No render-format/timeline check was relaxed.
-- Target-Mac browser acceptance and PR CI remain pending.
+- Real Mac image rendering exposed unbounded image decoding, tail-frame and color-range
+  problems. The renderer now decodes one static frame, repeats the exact finite frame
+  count, preserves background hue by applying dimming in RGB, and retains strict format
+  validation. Real color samples differ from their expected dimmed RGB by at most 3/255.
+- A fresh Qwen API run exposed Matroska millisecond timestamp precision in final copy
+  muxing. Fixed page durations and `setts` normalize PTS/DTS separately to the 30 fps grid
+  while retaining H264/B-frame ordering. Preflight checks that bitstream filter. Final
+  validation also enforces nominal frame rate, exact frozen frame count and stream time.
+- Final-source Mac proof reused genuine 3.52/3.28-second Qwen WAVs: 16.833333 seconds,
+  505 frames, all presentation timestamps on the 30 fps grid, complete decode, silent
+  pause RMS/peak zero, PNG/JPEG/WebP, reload/recovery and unchanged original image bytes.
+  Per-page monitored memory peaked below 500 MiB for the small representative fixtures;
+  this is observed usage, not a production OS memory quota.
+- The updated Mac service passed real image upload/preview, invalid-upload preservation
+  and a controlled restart with unchanged IDs/digests. A new complete speech→image-video
+  API run then produced 16.366667 seconds, 491 frames, 1,195,290 bytes, 1080p30 H264/AAC.
+  Preview returned 206, download returned an attachment, and complete decode passed.
+- GPT-6 Luna/max accepted the finite-frame, color and CFR corrections. All nine selected
+  backend production files are covered; no Blocker/Required remains in that scope.
+- PR #10 is a draft. Initial CI passed; the final revision must pass before squash.
+  The service remains on loopback port 8877. Owner browser acceptance is pending.
 - TTS voice selection remains P2 Task 010. Restart audio reuse remains P3 Task 008.
