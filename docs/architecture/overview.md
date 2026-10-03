@@ -6,7 +6,20 @@ Keep the MVP small, but preserve clear seams around capabilities that are likely
 
 Avoid speculative infrastructure. Prefer interfaces at genuine volatility points.
 
-## Recommended capability boundaries
+## Selected application stack
+
+ADR 0001 selects:
+
+- Python 3.12 + FastAPI backend.
+- React 19 + TypeScript + Vite 8 frontend.
+- uv for Python project/dependency management.
+- npm for the initial frontend workflow.
+- pytest + Ruff for backend validation.
+- Vitest + TypeScript build checks for frontend validation.
+
+During development, Vite proxies local API requests to FastAPI. The intended end-user direction is a local Python service serving a built frontend in the system browser, with the exact macOS launcher/package mechanism deferred until TTS runtime validation.
+
+## Capability boundaries
 
 ### 1. Application / workflow
 
@@ -18,11 +31,11 @@ Coordinates the end-to-end flow:
 - review/regenerate
 - export
 
-This layer should not depend directly on a specific AI or TTS vendor.
+This layer must not depend directly on a specific AI or TTS vendor.
 
 ### 2. Text processing
 
-Suggested abstraction:
+Abstraction:
 
 `TextProcessingProvider`
 
@@ -35,18 +48,20 @@ The canonical sentence list belongs to the application/domain model, not to any 
 
 ### 3. TTS
 
-Suggested abstraction:
+Abstraction:
 
 `SpeechProvider`
 
-Initial implementation:
+Initial target:
 - Qwen3-TTS
 
 Voice selection such as Aiden should be configuration/domain data, not scattered constants.
 
+Qwen3-TTS is treated as an optional heavy runtime dependency and is intentionally excluded from normal CI.
+
 ### 4. Video rendering
 
-Suggested abstraction:
+Abstraction:
 
 `VideoRenderer`
 
@@ -92,4 +107,4 @@ unless a later requirement materially justifies them.
 
 ## Decision records
 
-Significant architecture choices should be recorded under `docs/architecture/decisions/` as short ADRs.
+Significant architecture choices are recorded under `docs/architecture/decisions/`.

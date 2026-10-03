@@ -8,7 +8,7 @@ The project turns an English dialogue into a repeatable shadowing-video workflow
 
 ## Current status
 
-This repository is in the product/bootstrap stage. The MVP is intentionally small, while the architecture should leave room for later expansion.
+The application stack is selected and a runnable shell is being established. The MVP is intentionally small, while the architecture leaves explicit extension seams for later capabilities.
 
 ### Confirmed MVP boundaries
 
@@ -36,6 +36,45 @@ Two modes are planned:
 
 Initial AI-provider targets: **DeepSeek** and **Codex**, behind a provider abstraction.
 
+## Technology stack
+
+- Backend: Python 3.12 + FastAPI.
+- Python project/dependencies: uv.
+- Frontend: React 19 + TypeScript + Vite 8.
+- Frontend packages: npm.
+- Backend tests: pytest.
+- Python lint/format: Ruff.
+- Frontend tests: Vitest.
+- Media: FFmpeg behind an adapter.
+- TTS: Qwen3-TTS behind an adapter.
+
+See [ADR 0001](docs/architecture/decisions/0001-application-stack.md).
+
+## Quick start
+
+Prerequisites: Python 3.12, uv, Node.js 22.12+ and FFmpeg.
+
+```bash
+cd backend
+uv sync --extra dev
+
+cd ../frontend
+npm install
+
+cd ..
+bash scripts/dev.sh
+```
+
+The browser UI opens at `http://127.0.0.1:5173`; Vite proxies `/api` to the local FastAPI service.
+
+Run repository checks with:
+
+```bash
+bash scripts/check.sh
+```
+
+See [development setup](docs/development/setup.md) for full details.
+
 ## AI-first development
 
 This repository is structured so Codex/AI agents can take small, well-specified tasks and verify their own work.
@@ -52,6 +91,8 @@ Start here:
 ## Repository map
 
 - `AGENTS.md` — repository-wide instructions for AI coding agents.
+- `backend/` — FastAPI application and Python-side integrations.
+- `frontend/` — React/TypeScript browser UI.
 - `docs/requirements/` — product requirements and scope.
 - `docs/architecture/` — architecture boundaries and ADRs.
 - `docs/development/` — setup, testing, and AI-development conventions.
@@ -60,7 +101,6 @@ Start here:
 - `prompts/` — runtime prompt assets used by product AI features.
 - `samples/` — small, safe example inputs/assets only.
 - `scripts/` — developer automation.
-- `src/` — application source once the implementation stack is selected.
 
 ## Important repository rules
 
@@ -73,7 +113,3 @@ Do **not** commit:
 - Runtime databases/state, logs, caches, or temporary workspaces.
 
 See [.gitignore](.gitignore) and [.env.example](.env.example).
-
-## Implementation status
-
-The concrete frontend/backend packaging stack is intentionally **not selected yet**. The first ready task is to make that decision against the product constraints rather than prematurely locking the repository into a framework.

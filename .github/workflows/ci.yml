@@ -17,12 +17,13 @@ jobs:
           test -f AGENTS.md
           test -f docs/requirements/product-requirements.md
           test -f docs/architecture/overview.md
+          test -f docs/architecture/decisions/0001-application-stack.md
           test -f docs/development/ai-development.md
 
       - name: Reject obvious committed local secrets
         shell: bash
         run: |
-          if git ls-files | grep -E '(^|/).env($|.)' | grep -v -E '(^|/).env.example$'; then
+          if git ls-files | grep -E '(^|/)\.env($|\.)' | grep -v -E '(^|/)\.env\.example$'; then
             echo "Local .env files must not be committed."
             exit 1
           fi
@@ -30,10 +31,54 @@ jobs:
       - name: Reject generated media
         shell: bash
         run: |
-          if git ls-files | grep -Ei '.(mp4|mov|mkv|webm|wav|mp3|m4a|aac|flac)$'; then
+          if git ls-files | grep -Ei '\.(mp4|mov|mkv|webm|wav|mp3|m4a|aac|flac)$'; then
             echo "Generated media must not be committed."
             exit 1
           fi
 
-      - name: Note
-        run: echo "Language-specific lint/test/build jobs will be added after task 001 selects the application stack."
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.2.0
+        with:
+          enable-cache: true
+
+      - name: Install Python
+        run: uv python install 3.12
+
+      - name: Install backend dependencies
+        run: uv sync --extra dev
+
+      - name: Ruff lint
+        run: uv run ruff check .
+
+      - name: Ruff format
+        run: uv run ruff format --check .
+
+      - name: Pytest
+        run: uv run pytest
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.12"
+
+      - name: Install frontend dependencies
+        run: npm install
+
+      - name: Typecheck, test, and build
+        run: npm run check
