@@ -19,6 +19,16 @@ jobs:
           test -f docs/architecture/overview.md
           test -f docs/architecture/decisions/0001-application-stack.md
           test -f docs/development/ai-development.md
+          test -f docs/standards/README.md
+          test -f docs/standards/agent-operating-model.md
+          test -f docs/standards/code-standards.md
+          test -f docs/standards/architecture-guardrails.md
+          test -f docs/standards/testing-standards.md
+          test -f docs/standards/git-workflow.md
+          test -f docs/standards/task-standard.md
+          test -f docs/standards/review-standard.md
+          test -f docs/standards/documentation-standard.md
+          test -f docs/standards/security-standard.md
 
       - name: Reject obvious committed local secrets
         shell: bash
