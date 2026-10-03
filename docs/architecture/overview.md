@@ -82,6 +82,18 @@ The exact storage format is not selected yet.
 
 Keep persistent project metadata separate from large generated media where practical.
 
+### 6. Future task execution and control
+
+Preserve an application-level task boundary so several tasks can eventually be prepared, suspended, scheduled, and recovered without tying execution to an open UI session. Assigned work must reference frozen or versioned source, reviewed canonical sentences with stable IDs, and validated configuration; its stable task identity must be distinct from each execution attempt.
+
+Future scheduling coordinates application workflows. It does not own domain operations or replace human review. The first future local executor is limited to one heavy model/media job at a time; scheduling policy, checkpoints, persistence, and later concurrency need explicit decisions before implementation.
+
+UI, a future CLI, and a future MCP adapter must call the same application commands and status queries. MCP is a control adapter, not a path to mutate domain objects or persistence directly. Local access, validated inputs, declared permissions, and required approvals apply at the command boundary.
+
+Keep diagnostic events behind an application observability boundary. Task/run/correlation and canonical sentence IDs must connect state changes, provider attempts, safe configuration references, asset references, and sanitized failures without placing secrets or full user dialogue in logs.
+
+The MVP remains manually initiated, with one video at a time and no scheduler or MCP runtime. See [future task and control seams](future-task-control.md) for the reserved boundaries and decisions that remain open.
+
 ## Extension seams
 
 MVP architecture should allow later:
@@ -89,6 +101,8 @@ MVP architecture should allow later:
 - additional TTS engines
 - additional video templates
 - batch orchestration
+- prepared, suspended, and scheduled local tasks
+- UI/CLI/MCP control through shared application commands
 - alternate storage/runtime modes
 
 Do not implement those features before needed.
