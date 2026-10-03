@@ -1,5 +1,7 @@
 import asyncio
+import hashlib
 import json
+import math
 import os
 import struct
 from pathlib import Path
@@ -17,6 +19,7 @@ from shadowing_video_studio.providers.process import ProcessResult
 from shadowing_video_studio.text_processing import PreparationError
 from shadowing_video_studio.video_rendering import (
     FrozenVideoSentence,
+    FrozenVisualAsset,
     TextLayout,
     VideoRenderingError,
     video_timeline,
@@ -68,7 +71,10 @@ def video_metadata(duration=6):
                 "width": 1920,
                 "height": 1080,
                 "avg_frame_rate": "30/1",
+                "r_frame_rate": "30/1",
                 "pix_fmt": "yuv420p",
+                "nb_frames": str(round(duration * 30)) if math.isfinite(duration) else "180",
+                "duration": str(duration),
             },
             {"codec_type": "audio", "codec_name": "aac", "sample_rate": "48000", "channels": 1},
         ],
@@ -175,6 +181,10 @@ def test_commands_use_fixed_relative_files_and_no_source_interpolation():
     final = concat_arguments(Path("/configured/ffmpeg"))
     assert final[final.index("-c:a") + 1] == "aac"
     assert final[final.index("-safe") + 1] == "1"
+    assert final[final.index("-bsf:v") + 1] == (
+        "setts=pts=round(PTS*TB*30):dts=round(DTS*TB*30):duration=1:time_base=1/30"
+    )
+    assert final[final.index("-video_track_timescale") + 1] == "30000"
     assert 0 < int(final[final.index("-fs") + 1]) < 128 * 1024 * 1024
 
 
@@ -212,7 +222,9 @@ def test_render_preserves_originals_uses_fresh_directory_and_reports_progress(tm
     assert progress == [(1, 2), (2, 2)]
     assert sentence.audio_path.read_bytes() == original
     assert " ".join((job / "page-0001.txt").read_text(encoding="utf-8").split()) == sentence.text
-    assert (job / "pages.txt").read_text() == "file 'page-0001.mkv'\nfile 'page-0002.mkv'\n"
+    assert (job / "pages.txt").read_text() == (
+        "file 'page-0001.mkv'\nduration 6.000000000\nfile 'page-0002.mkv'\nduration 6.000000000\n"
+    )
     for arguments, options in runner.calls:
         assert options["cwd"] == job and options["timeout"] == 600
         assert "shell" not in options
@@ -221,6 +233,67 @@ def test_render_preserves_originals_uses_fresh_directory_and_reports_progress(tm
     with pytest.raises(VideoRenderingError) as error:
         asyncio.run(renderer.render([sentence], job))
     assert error.value.code == "output_exists" and result.path.exists()
+
+
+def test_selected_images_are_frozen_checked_and_use_contain_cover_graph(tmp_path):
+    runner = FakeRunner(output_seconds=12)
+    renderer, sentence, job = setup_renderer(tmp_path, runner)
+    background_path = tmp_path / "private background [name].png"
+    illustration_path = tmp_path / "private illustration [name].webp"
+    background_path.write_bytes(b"synthetic already-decoded PNG fixture")
+    illustration_path.write_bytes(b"synthetic already-decoded WebP fixture")
+
+    def frozen_image(identifier, path, mime):
+        content = path.read_bytes()
+        return FrozenVisualAsset(
+            identifier * 32, path, len(content), hashlib.sha256(content).hexdigest(), mime
+        )
+
+    background = frozen_image("a", background_path, "image/png")
+    illustration = frozen_image("b", illustration_path, "image/webp")
+    illustrated = FrozenVideoSentence(
+        sentence.id, sentence.text, sentence.audio_path, 1, illustration
+    )
+    second = FrozenVideoSentence("two", "A second sentence.", sentence.audio_path, 1, illustration)
+    result = asyncio.run(renderer.render([illustrated, second], job, background=background))
+    assert result.duration_seconds == 12
+    assert (job / "visual-0001.png").read_bytes() == background_path.read_bytes()
+    assert (job / "visual-0002.webp").read_bytes() == illustration_path.read_bytes()
+    assert len(list(job.glob("visual-*"))) == 2  # Repeated selections are copied once.
+    pages = [arguments for arguments, _ in runner.calls if arguments[-1].endswith(".mkv")]
+    for arguments in pages:
+        graph = arguments[arguments.index("-filter_complex") + 1]
+        inputs = [arguments[index + 1] for index, value in enumerate(arguments) if value == "-i"]
+        assert inputs[1:] == ["visual-0001.png", "visual-0002.webp"]
+        assert "private" not in graph and "private" not in " ".join(arguments)
+        assert "force_original_aspect_ratio=increase" in graph and "crop=w=1920:h=1080" in graph
+        assert "color=black@0.60" in graph and "force_original_aspect_ratio=decrease" in graph
+        assert (
+            "format=rgb24,drawbox=x=0:y=0:w=iw:h=ih:color=black@0.60:t=fill,format=yuv420p" in graph
+        )
+        assert "x=1240+(584-overlay_w)/2" in graph and "apad=pad_dur=5" in graph
+        assert "out_range=tv" in graph and "loop=loop=179:size=1:start=0" in graph
+        assert "setpts=N/(30*TB)" in graph and "eof_action=repeat:shortest=0" in graph
+        assert "-loop" not in arguments
+        for index, value in enumerate(arguments):
+            if value == "-i" and arguments[index + 1].startswith("visual-"):
+                assert arguments[index - 4 : index - 2] == ["-threads", "1"]
+
+    illustration_path.write_bytes(b"changed image")
+    fresh = tmp_path / "changed-image-output"
+    fresh.mkdir()
+    runner.calls.clear()
+    with pytest.raises(VideoRenderingError) as error:
+        asyncio.run(renderer.render([illustrated], fresh, background=background))
+    assert error.value.code == "invalid_visual" and not runner.calls and not list(fresh.iterdir())
+    large = tmp_path / "large-background.png"
+    large.write_bytes(b"x" * (2 * 1024 * 1024))
+    renderer.output_budget_bytes = 134 * 1024 * 1024
+    with pytest.raises(VideoRenderingError) as error:
+        asyncio.run(
+            renderer.render([sentence], fresh, background=frozen_image("c", large, "image/png"))
+        )
+    assert error.value.code == "storage_budget" and not runner.calls and not list(fresh.iterdir())
 
 
 @pytest.mark.parametrize(
@@ -292,3 +365,18 @@ def test_output_metadata_rejects_codec_resolution_and_frame_rate():
         payload["streams"][0][field] = value
         with pytest.raises(VideoRenderingError):
             validate_video_metadata(payload, 6)
+
+
+def test_frame_grid_rejects_millisecond_copy_rate_and_missing_frozen_frame():
+    expected = 505 / 30
+    payload = video_metadata(expected)
+    payload["format"]["duration"] = "16.833333"
+    payload["streams"][0]["duration"] = "16.833333"
+    assert validate_video_metadata(payload, expected) == 16.833333
+    payload["streams"][0]["avg_frame_rate"] = "505000/16833"
+    with pytest.raises(VideoRenderingError):
+        validate_video_metadata(payload, expected)
+    payload["streams"][0]["avg_frame_rate"] = "30/1"
+    payload["streams"][0]["nb_frames"] = "504"
+    with pytest.raises(VideoRenderingError):
+        validate_video_metadata(payload, expected)

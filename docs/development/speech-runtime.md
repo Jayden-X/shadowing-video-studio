@@ -88,6 +88,12 @@ remain on disk and are not rediscovered as trustworthy assets. Browser refresh l
 document/selection. A durable project/history format is deferred. Ordinary CI uses fakes
 and tiny temporary WAVs; it never installs Qwen or downloads weights.
 
+The owner assigned validated reuse across restart to P3
+[Task 008](../../tasks/backlog/008-restart-audio-reuse.md): frontend-cached association keys
+plus trusted backend metadata/file validation. This is a planned optimization; the restart
+behavior described above still applies. P2 supported-voice selection is tracked in
+[Task 010](../../tasks/backlog/010-tts-voice-selection.md).
+
 Official behavior references: [Qwen wrapper](https://github.com/QwenLM/Qwen3-TTS/blob/main/qwen_tts/inference/qwen3_tts_model.py)
 and [talker generation](https://github.com/QwenLM/Qwen3-TTS/blob/main/qwen_tts/core/models/modeling_qwen3_tts.py).
 The completion observer is version-gated to Qwen 0.1.1; runtime/source changes require a new check.

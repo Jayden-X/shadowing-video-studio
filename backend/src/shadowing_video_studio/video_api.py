@@ -11,6 +11,7 @@ from shadowing_video_studio.speech_api import get_speech_service, verify_local_r
 from shadowing_video_studio.speech_jobs import SpeechJobs
 from shadowing_video_studio.video_jobs import VideoJobError, VideoJobs, VideoSentenceSelection
 from shadowing_video_studio.video_settings import VideoSettings
+from shadowing_video_studio.visual_assets import VisualLibrary
 
 router = APIRouter(prefix="/api/video", dependencies=[Depends(verify_local_request)])
 
@@ -20,20 +21,25 @@ class VideoSentenceRequest(BaseModel):
     id: StrictStr = Field(min_length=1, max_length=100)
     text: StrictStr = Field(min_length=1, max_length=4000)
     assetId: StrictStr = Field(pattern=r"^[0-9a-f]{32}$")
+    illustrationAssetId: StrictStr | None = Field(default=None, pattern=r"^[0-9a-f]{32}$")
 
 
 class VideoJobRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     sentences: list[VideoSentenceRequest] = Field(min_length=1, max_length=MAX_SPEECH_SENTENCES)
+    backgroundAssetId: StrictStr | None = Field(default=None, pattern=r"^[0-9a-f]{32}$")
 
 
-def create_video_service(speech: SpeechJobs) -> VideoJobs:
-    return VideoJobs(VideoSettings.from_environment(), speech)
+def create_video_service(speech: SpeechJobs, visuals: VisualLibrary | None = None) -> VideoJobs:
+    return VideoJobs(VideoSettings.from_environment(), speech, visuals=visuals)
 
 
 def get_video_service(request: Request) -> VideoJobs:
     if not hasattr(request.app.state, "video"):
-        request.app.state.video = create_video_service(get_speech_service(request))
+        request.app.state.video = create_video_service(
+            get_speech_service(request),
+            getattr(getattr(request.app.state, "visuals", None), "library", None),
+        )
     return request.app.state.video
 
 
@@ -48,7 +54,11 @@ async def submit(
 ) -> dict:
     try:
         return await service.submit(
-            [VideoSentenceSelection(item.id, item.text, item.assetId) for item in payload.sentences]
+            [
+                VideoSentenceSelection(item.id, item.text, item.assetId, item.illustrationAssetId)
+                for item in payload.sentences
+            ],
+            background_asset_id=payload.backgroundAssetId,
         )
     except (VideoJobError, SpeechError) as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc

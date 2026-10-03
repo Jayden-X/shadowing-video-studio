@@ -17,9 +17,13 @@ describe("video API boundary", () => {
   it("freezes only canonical sentence and asset IDs and serves opaque export URLs", async () => {
     const fetchMock = respond(completed, 202);
     const controller = new AbortController();
-    expect(await createVideoJob(sentences, controller.signal)).toEqual(completed);
+    const illustrationId = "d".repeat(32);
+    const backgroundId = "e".repeat(32);
+    const frozenSentences = [{ ...sentences[0], illustrationAssetId: illustrationId }];
+    expect(await createVideoJob(frozenSentences, backgroundId, controller.signal)).toEqual(completed);
     expect(fetchMock).toHaveBeenCalledWith("/api/video/jobs", {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sentences }), signal: controller.signal,
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sentences: frozenSentences, backgroundAssetId: backgroundId }), signal: controller.signal,
     });
     expect(videoAssetUrl(assetId)).toBe(`/api/video/assets/${assetId}`);
     expect(videoAssetUrl(assetId, true)).toBe(`/api/video/assets/${assetId}?download=true`);
@@ -31,6 +35,8 @@ describe("video API boundary", () => {
     await expect(getVideoJob(jobId, 1)).rejects.toThrow(/invalid video progress/);
     const fetchMock = respond(completed);
     await expect(createVideoJob([{ ...sentences[0], assetId: "../private-file" }])).rejects.toThrow(/current generated audio/);
+    await expect(createVideoJob(sentences, "../private-file")).rejects.toThrow(/valid local asset/);
+    await expect(createVideoJob([{ ...sentences[0], illustrationAssetId: "../private-file" }])).rejects.toThrow(/valid local asset/);
     expect(fetchMock).not.toHaveBeenCalled();
     expect(() => videoAssetUrl("../private-file")).toThrow(/identifier/);
   });

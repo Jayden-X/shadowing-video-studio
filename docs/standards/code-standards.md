@@ -76,6 +76,16 @@ Errors should be:
 
 Never swallow an exception only to continue with corrupted state.
 
+## Media process bounds
+
+- Bound media sources by the frozen timeline before invoking tools; an output frame cap
+  alone does not bound input decoding or filter buffering. Decode a static image once
+  and repeat it for the finite page frame count.
+- Preserve output format, frame-rate and duration validation when adapting to installed
+  media tools. Verify the actual generated file, including a complete decode.
+- After a failed attempt stops, retain its evidence and account for verified actual
+  storage. If filesystem accounting is unsafe or incomplete, keep the full reservation.
+
 ## Configuration
 
 - No secrets in source.

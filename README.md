@@ -8,7 +8,7 @@ The project turns an English dialogue into a repeatable shadowing-video workflow
 
 ## Current status
 
-The local application shell, manual sentence editor, AI sentence proposals, local sentence speech, and fixed-template MP4 export are available. The MVP is intentionally small, while the architecture leaves explicit extension seams for later capabilities.
+The local application shell, manual sentence editor, AI sentence proposals, local sentence speech, and fixed-template MP4 export are available. Local background/illustration resources extend that template. The MVP is intentionally small, while the architecture leaves explicit extension seams for later capabilities.
 
 ### Confirmed MVP boundaries
 
@@ -49,6 +49,15 @@ Generation locks editing while the UI waits. **Stop waiting for speech** ends mo
 After reviewing the current sentence audio, explicitly choose **Generate video**. The fixed 1920 × 1080 template shows one sentence per page, a reserved visual area, a dynamic waveform, and a five-second silent practice pause after every sentence. Sentences without matching current audio are ineligible; text that cannot fit a page must be split and its speech generated again.
 
 Rendering shows progress and locks editing while the UI waits. **Stop waiting for video** ends monitoring without cancelling rendering; a known job can be monitored again. Preview completed exports with native video controls and download MP4 files. Repeated exports retain prior outputs. Download before restarting the service: export links and job metadata are volatile, while generated files remain locally preserved. Development uses Vite; the target Mac run can use the same local FastAPI service to serve the built frontend.
+
+### Backgrounds and illustrations
+
+Upload a static PNG/JPEG/WebP background or a right-side illustration for each sentence,
+or choose an existing image from the local library. Resources retain their IDs and bytes
+after a service restart. Backgrounds cover the frame under a dim layer; illustrations fit
+inside the right panel and remain visible during speech and the five-second pause.
+Video generation freezes the selected images alongside its sentence/audio inputs.
+See [local visual library](docs/development/visual-library.md) for limits and editing rules.
 
 ## Technology stack
 

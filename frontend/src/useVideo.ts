@@ -4,7 +4,7 @@ import { createVideoJob, getVideoJob, getVideoStatus, VideoApiError, type VideoJ
 const WAIT_LIMIT_MS = 30 * 60_000;
 const POLL_INTERVAL_MS = 1_000;
 const STATUS_LIMIT_MS = 15_000;
-type Attempt = { snapshot: VideoSentence[]; scope: number; jobId: string | null };
+type Attempt = { snapshot: VideoSentence[]; backgroundAssetId: string | null; scope: number; jobId: string | null };
 export type VideoExport = { assetId: string; durationSeconds: number; sentenceCount: number };
 
 export function useVideo() {
@@ -136,13 +136,18 @@ export function useVideo() {
     waitTimer.current = setTimeout(() => stopWaiting(true), WAIT_LIMIT_MS);
     return { token, signal: active.signal };
   }
-  async function generate(sentences: readonly VideoSentence[]) {
+  async function generate(sentences: readonly VideoSentence[], backgroundAssetId: string | null = null) {
     if (controller.current || attempt.current || !readiness?.available) return;
-    const current: Attempt = { snapshot: sentences.map(({ id, text, assetId }) => ({ id, text, assetId })), scope: scope.current, jobId: null };
+    const current: Attempt = {
+      snapshot: sentences.map(({ id, text, assetId, illustrationAssetId }) => ({ id, text, assetId, illustrationAssetId })),
+      backgroundAssetId,
+      scope: scope.current,
+      jobId: null,
+    };
     attempt.current = current;
     setJob(null);
     const { token, signal } = beginWaiting();
-    try { receive(await createVideoJob(current.snapshot, signal), current, token, signal); }
+    try { receive(await createVideoJob(current.snapshot, current.backgroundAssetId, signal), current, token, signal); }
     catch (value: unknown) { fail(value, token, signal); }
   }
   function resumeMonitoring() {

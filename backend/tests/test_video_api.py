@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import wave
 
 import httpx
@@ -19,6 +20,7 @@ from shadowing_video_studio.video_rendering import (
     video_timeline,
 )
 from shadowing_video_studio.video_settings import (
+    REQUIRED_BITSTREAM_FILTERS,
     REQUIRED_DRAWTEXT_OPTIONS,
     REQUIRED_ENCODERS,
     REQUIRED_FILTERS,
@@ -26,6 +28,7 @@ from shadowing_video_studio.video_settings import (
     VideoSettings,
     VideoToolPreflight,
 )
+from shadowing_video_studio.visual_assets import VisualAsset, VisualAssetError
 
 
 class FakeCapabilityRunner:
@@ -49,6 +52,8 @@ class FakeCapabilityRunner:
                     f" {option} <string> ..FV....... synthetic" for option in options
                 ).encode(),
             )
+        if arguments[-1] == "-bsfs":
+            return ProcessResult(0, "\n".join(sorted(REQUIRED_BITSTREAM_FILTERS)).encode())
         options = {
             "-filters": ("...", REQUIRED_FILTERS),
             "-encoders": ("V.....", REQUIRED_ENCODERS),
@@ -76,12 +81,14 @@ class FakeSpeech:
 class FakeRenderer:
     def __init__(self):
         self.calls = []
+        self.backgrounds = []
         self.started = asyncio.Event()
         self.release = None
         self.fail = False
 
-    async def render(self, sentences, directory, *, on_progress=None):
+    async def render(self, sentences, directory, *, background=None, on_progress=None):
         self.calls.append(tuple(sentences))
+        self.backgrounds.append(background)
         assert not list(directory.iterdir())
         self.started.set()
         if on_progress:
@@ -308,11 +315,21 @@ def test_shared_busy_gate_failure_preservation_and_explicit_retry(tmp_path):
                 )
                 evidence = tmp_path / "video" / failed["id"] / "render" / "failed-evidence.txt"
                 assert evidence.exists()
+                for _ in range(3):
+                    another = await client.post("/api/video/jobs", json={"sentences": rows})
+                    assert another.status_code == 202
+                    await service.wait()
+                    assert service.get(another.json()["id"])["status"] == "failed"
+                assert service._reserved_bytes == sum(
+                    path.stat().st_size
+                    for path in (tmp_path / "video").rglob("*")
+                    if path.is_file()
+                )
                 renderer.fail = False
                 retry = await client.post("/api/video/jobs", json={"sentences": rows})
                 await service.wait()
                 assert service.get(retry.json()["id"])["status"] == "completed"
-                assert evidence.exists() and len(renderer.calls) == 2
+                assert evidence.exists() and len(renderer.calls) == 5
         finally:
             await service.close()
             await service.speech.close()
@@ -351,6 +368,84 @@ def test_request_path_protection_and_changed_export_are_safe(tmp_path):
                     handle.write(b"changed")
                 altered = await client.get(f"/api/video/assets/{asset_id}")
                 assert altered.status_code == 404 and str(tmp_path) not in altered.text
+        finally:
+            await service.close()
+            await service.speech.close()
+
+    asyncio.run(scenario())
+
+
+def test_image_selection_freezes_bytes_and_missing_changed_kind_blocks_tools(tmp_path):
+    class FrozenLibrary:
+        def __init__(self):
+            self.assets = {}
+
+        def get(self, asset_id, kind=None):
+            asset = self.assets.get(asset_id)
+            if not asset or asset.kind != kind or not asset.path.is_file():
+                raise VisualAssetError("Select or upload an available image.", 404)
+            return asset
+
+        def read(self, asset_id, kind=None):
+            return self.get(asset_id, kind).path.read_bytes()
+
+    async def scenario():
+        service, renderer, rows = fixture_service(tmp_path)
+        service.visuals = library = FrozenLibrary()
+        for character, kind in (("a", "background"), ("b", "illustration")):
+            path = tmp_path / f"source-{kind}.png"
+            content = f"synthetic validated {kind}".encode()
+            path.write_bytes(content)
+            library.assets[character * 32] = VisualAsset(
+                character * 32,
+                kind,
+                f"{kind}.png",
+                "image/png",
+                1,
+                1,
+                len(content),
+                hashlib.sha256(content).hexdigest(),
+                path,
+            )
+        background = library.assets["a" * 32]
+        illustration = library.assets["b" * 32]
+        original_background = background.path.read_bytes()
+        original_illustration = illustration.path.read_bytes()
+        try:
+            async with client_for(service) as client:
+                for bad_background in ("0" * 32, illustration.id):
+                    rejected = await client.post(
+                        "/api/video/jobs",
+                        json={"sentences": rows, "backgroundAssetId": bad_background},
+                    )
+                    assert rejected.status_code == 404
+                illustration.path.write_bytes(b"changed")
+                selected = [dict(rows[1], illustrationAssetId=illustration.id), rows[0]]
+                changed = await client.post(
+                    "/api/video/jobs",
+                    json={"sentences": selected, "backgroundAssetId": background.id},
+                )
+                assert changed.status_code == 409
+                assert not renderer.calls and not service._tool_preflight.runner.calls
+                assert not service.gate.busy and not (tmp_path / "video").exists()
+                illustration.path.write_bytes(original_illustration)
+                submitted = await client.post(
+                    "/api/video/jobs",
+                    json={"sentences": selected, "backgroundAssetId": background.id},
+                )
+                assert submitted.status_code == 202
+                # Source mutation after acceptance cannot alter the frozen bytes for this attempt.
+                background.path.write_bytes(b"later source change")
+                illustration.path.write_bytes(b"later source change")
+                await service.wait()
+                assert service.get(submitted.json()["id"])["status"] == "completed"
+                frozen = renderer.calls[0]
+                assert [item.id for item in frozen] == [rows[1]["id"], rows[0]["id"]]
+                assert frozen[0].illustration.id == illustration.id
+                assert frozen[0].illustration.path.read_bytes() == original_illustration
+                assert frozen[1].illustration is None
+                assert renderer.backgrounds[0].path.read_bytes() == original_background
+                assert all(service.speech.assets.read(row["assetId"]) for row in rows)
         finally:
             await service.close()
             await service.speech.close()
