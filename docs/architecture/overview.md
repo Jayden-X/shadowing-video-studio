@@ -96,6 +96,13 @@ registration boundary. This does not make speech/export lookup metadata durable.
 
 Keep persistent project metadata separate from large generated media where practical.
 
+The owner consolidated project/history preservation and restart audio reuse into
+[Task008](../../tasks/backlog/008-project-history-persistence.md). One saved-project recovery
+workflow restores source, stable sentence identities, visual/voice choices and trusted
+media/history associations. Backend metadata is authoritative; frontend cache keys are
+optional reopening hints. The task remains backlog pending the persistence ADR and save
+semantics; no storage format or job-resume mechanism is selected by this consolidation.
+
 ### 6. Future task execution and control
 
 Preserve an application-level task boundary so several tasks can eventually be prepared, suspended, scheduled, and recovered without tying execution to an open UI session. Assigned work must reference frozen or versioned source, reviewed canonical sentences with stable IDs, and validated configuration; its stable task identity must be distinct from each execution attempt.

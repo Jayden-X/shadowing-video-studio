@@ -171,7 +171,15 @@ See [Task 009](../../tasks/done/009-local-visual-library.md) for acceptance and 
 See [Task 010](../../tasks/done/010-tts-voice-selection.md). The local visual folder/list
 interaction can inform this selector's UI; supported voices are provider capabilities.
 
-### P3 — Audio reuse across browser/service restarts
+### P3 — Local project/history preservation and restart recovery
+
+- Save, list and reopen local projects, including original source, stable sentence IDs,
+  current sentence order/edits, selected voice, background and sentence illustrations.
+- Preserve generated audio and completed-video history with their frozen input/configuration
+  bindings; later project edits must not overwrite earlier files or relabel old outputs.
+- Closing the browser or restarting the service retains successfully saved work. Restore
+  must not automatically invoke AI/TTS/export or resume interrupted jobs.
+- Audio reuse below is part of this project recovery task, not a separate task.
 
 - Cache stable audio association keys in the frontend so reopening the same work can request
   reuse when both the cached association and the corresponding local file remain available.
@@ -179,13 +187,15 @@ interaction can inform this selector's UI; supported voices are provider capabil
   exact sentence content, voice/language/model/configuration, file ownership, integrity and
   audio format before registering a usable asset in the new service session.
 - Existing transient asset IDs and browser cache alone are insufficient proof of validity.
-  Lost/stale associations, missing/corrupt files or configuration changes fall back to explicit
+  Invalid/unavailable authoritative associations, missing/corrupt files or configuration
+  changes fall back to explicit
   regeneration with a clear reason, preserving original text and existing media.
-- This is best-effort reuse and does not guarantee recovery after browser-cache clearing or
-  file removal. Frontend cache and backend metadata formats require a design decision before
-  implementation; large WAV files remain local files outside Git.
+- Frontend cache keys are reopening hints; clearing them must not prevent reopening projects
+  that remain in authoritative local storage. Missing/corrupt local metadata or files require
+  explicit recovery/regeneration. Save triggers, frontend cache and backend project/history
+  formats require a design decision before implementation; large media stays outside Git.
 
-See [Task 008](../../tasks/backlog/008-restart-audio-reuse.md).
+See the unified [Task 008](../../tasks/backlog/008-project-history-persistence.md).
 
 ## Open decisions
 
