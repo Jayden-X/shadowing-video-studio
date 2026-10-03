@@ -10,7 +10,9 @@ from shadowing_video_studio.speech import (
     MAX_SPEECH_SENTENCES,
     MAX_SPEECH_TEXT,
     MAX_SPEECH_TOTAL_TEXT,
+    VOICE,
     HeavyJobGate,
+    SpeechCapabilities,
     SpeechError,
     SpeechProvider,
     SpeechReadiness,
@@ -63,7 +65,37 @@ class SpeechJobs:
     async def readiness(self) -> SpeechReadiness:
         return await self.provider.readiness()
 
-    async def submit(self, sentences: list[SpeechSentence], force: bool = False) -> dict:
+    async def capabilities(self) -> SpeechCapabilities:
+        return await self.provider.capabilities()
+
+    async def resolve_voice(self, voice: str, configuration_fingerprint: str | None = None) -> str:
+        capabilities = await self.capabilities()
+        if not capabilities.available:
+            raise SpeechError(
+                capabilities.reason or "Configure speech before selecting a voice.", 503
+            )
+        selected = next((item for item in capabilities.voices if item.id == voice), None)
+        if selected is None:
+            raise SpeechError(
+                "This voice is unsupported. Refresh the voice list and select again.", 422
+            )
+        fingerprint = self.provider.fingerprint_for_voice(voice)
+        if selected.configuration_fingerprint != fingerprint or (
+            configuration_fingerprint is not None and configuration_fingerprint != fingerprint
+        ):
+            raise SpeechError(
+                "Speech configuration changed. Refresh voices and generate matching audio.", 409
+            )
+        return fingerprint
+
+    async def submit(
+        self,
+        sentences: list[SpeechSentence],
+        force: bool = False,
+        voice: str = VOICE,
+        configuration_fingerprint: str | None = None,
+    ) -> dict:
+        sentences = list(sentences)
         validate_sentences(sentences, force)
         if self._closed:
             raise SpeechError("Speech service is stopping. Restart before submitting work.", 503)
@@ -72,15 +104,26 @@ class SpeechJobs:
                 "This service session has reached its job limit. Restart to continue.", 409
             )
         rows = []
-        fingerprint = self.provider.fingerprint
+        fingerprint = await self.resolve_voice(voice, configuration_fingerprint)
+        # Capability probing yields; shutdown/capacity must still be enforced at acceptance.
+        if self._closed:
+            raise SpeechError("Speech service is stopping. Restart before submitting work.", 503)
+        if len(self._jobs) >= MAX_SESSION_JOBS:
+            raise SpeechError(
+                "This service session has reached its job limit. Restart to continue.", 409
+            )
         for sentence in sentences:
             asset = (
-                self.assets.reusable(sentence, fingerprint) if self.assets and not force else None
+                self.assets.reusable(sentence, fingerprint, voice)
+                if self.assets and not force
+                else None
             )
             rows.append(
                 {
                     "id": sentence.id,
                     "text": sentence.text,
+                    "voice": voice,
+                    "configurationFingerprint": fingerprint,
                     "status": "ready" if asset else "pending",
                     "assetId": asset.id if asset else None,
                     "durationSeconds": asset.duration_seconds if asset else None,
@@ -93,28 +136,28 @@ class SpeechJobs:
         if needs_work and not self.gate.claim(job_id):
             raise SpeechError("A local media job is already running. Wait for it to finish.", 409)
         try:
-            if needs_work:
-                readiness = await self.provider.readiness()
-                if not readiness.available or self.assets is None:
-                    raise SpeechError(
-                        readiness.reason or "Configure speech before generating audio.", 503
-                    )
+            # resolve_voice already checked runtime availability. Accept without
+            # another await so shutdown/capacity cannot change after gate claim.
+            if needs_work and self.assets is None:
+                raise SpeechError("Configure speech before generating audio.", 503)
             job = {
                 "id": job_id,
+                "voice": voice,
+                "configurationFingerprint": fingerprint,
                 "status": "queued" if needs_work else "completed",
                 "sentences": rows,
                 "error": None,
             }
             self._jobs[job_id] = job
             if needs_work:
-                self._task = asyncio.create_task(self._run(job, fingerprint))
+                self._task = asyncio.create_task(self._run(job, fingerprint, voice))
             return deepcopy(job)
         except BaseException:
             if needs_work:
                 self.gate.release(job_id)
             raise
 
-    async def _run(self, job: dict, fingerprint: str) -> None:
+    async def _run(self, job: dict, fingerprint: str, voice: str) -> None:
         job["status"] = "running"
         try:
             assert self.assets is not None
@@ -124,9 +167,13 @@ class SpeechJobs:
                 row["status"] = "generating"
                 try:
                     asset_id, destination = self.assets.allocate()
-                    await self.provider.generate(row["text"], destination)
+                    await self.provider.generate(row["text"], destination, voice)
                     asset = self.assets.register(
-                        asset_id, SpeechSentence(row["id"], row["text"]), fingerprint, destination
+                        asset_id,
+                        SpeechSentence(row["id"], row["text"]),
+                        fingerprint,
+                        destination,
+                        voice,
                     )
                     row.update(
                         status="ready", assetId=asset.id, durationSeconds=asset.duration_seconds

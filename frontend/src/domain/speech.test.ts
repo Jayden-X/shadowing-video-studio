@@ -1,18 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { currentSentenceAudio, getCompleteSpeechSelection, jobMatchesSnapshot, selectJobAudio, speechInputProblem, type SpeechJob } from "./speech";
+import { currentSentenceAudio, getCompleteSpeechSelection, jobMatchesSnapshot, selectJobAudio, sentenceAudioMismatch, speechInputProblem, type SpeechBinding, type SpeechJob } from "./speech";
 
 const sentence = { id: "sentence-001", text: "Hello." };
+const binding: SpeechBinding = { voice: "Aiden", configurationFingerprint: "f".repeat(64) };
 const readyJob: SpeechJob = {
-  id: "a".repeat(32), status: "completed", error: null,
-  sentences: [{ ...sentence, status: "ready", assetId: "b".repeat(32), durationSeconds: 1.5, error: null, reused: false }],
+  id: "a".repeat(32), status: "completed", error: null, ...binding,
+  sentences: [{ ...sentence, ...binding, status: "ready", assetId: "b".repeat(32), durationSeconds: 1.5, error: null, reused: false }],
 };
 
 describe("speech selection", () => {
   it("matches the entire ordered frozen snapshot", () => {
-    expect(jobMatchesSnapshot(readyJob, [sentence])).toBe(true);
-    expect(jobMatchesSnapshot(readyJob, [{ ...sentence, text: "Changed." }])).toBe(false);
-    expect(jobMatchesSnapshot(readyJob, [{ ...sentence, id: "another" }])).toBe(false);
-    expect(jobMatchesSnapshot(readyJob, [sentence, { id: "other", text: "Next." }])).toBe(false);
+    expect(jobMatchesSnapshot(readyJob, [sentence], binding)).toBe(true);
+    expect(jobMatchesSnapshot(readyJob, [{ ...sentence, text: "Changed." }], binding)).toBe(false);
+    expect(jobMatchesSnapshot(readyJob, [{ ...sentence, id: "another" }], binding)).toBe(false);
+    expect(jobMatchesSnapshot(readyJob, [sentence, { id: "other", text: "Next." }], binding)).toBe(false);
+    expect(jobMatchesSnapshot(readyJob, [sentence], { ...binding, voice: "Other" })).toBe(false);
   });
   it("preserves successful selection across pending and failed attempts", () => {
     const original = selectJobAudio({}, readyJob);
@@ -25,24 +27,34 @@ describe("speech selection", () => {
   });
   it("invalidates edited text and incomplete lists for preview and video", () => {
     const selection = selectJobAudio({}, readyJob);
-    expect(currentSentenceAudio(sentence, selection)?.assetId).toBe("b".repeat(32));
-    expect(currentSentenceAudio({ ...sentence, text: "Hello. " }, selection)).toBeNull();
-    expect(getCompleteSpeechSelection([sentence], selection)).toEqual([selection[sentence.id]]);
-    expect(getCompleteSpeechSelection([{ ...sentence, text: "Different." }], selection)).toBeNull();
-    expect(getCompleteSpeechSelection([sentence, { id: "other", text: "Next." }], selection)).toBeNull();
-    expect(getCompleteSpeechSelection([], selection)).toBeNull();
+    expect(currentSentenceAudio(sentence, selection, binding)?.assetId).toBe("b".repeat(32));
+    expect(currentSentenceAudio({ ...sentence, text: "Hello. " }, selection, binding)).toBeNull();
+    expect(getCompleteSpeechSelection([sentence], selection, binding)).toEqual([selection[sentence.id]]);
+    expect(getCompleteSpeechSelection([{ ...sentence, text: "Different." }], selection, binding)).toBeNull();
+    expect(getCompleteSpeechSelection([sentence, { id: "other", text: "Next." }], selection, binding)).toBeNull();
+    expect(getCompleteSpeechSelection([], selection, binding)).toBeNull();
+  });
+  it("preserves audio but rejects another voice or changed configuration for preview and video", () => {
+    const selection = selectJobAudio({}, readyJob);
+    expect(sentenceAudioMismatch(sentence, selection, { ...binding, voice: "Other" })).toBe("voice");
+    expect(currentSentenceAudio(sentence, selection, { ...binding, voice: "Other" })).toBeNull();
+    expect(getCompleteSpeechSelection([sentence], selection, { ...binding, voice: "Other" })).toBeNull();
+    const nextConfiguration = { ...binding, configurationFingerprint: "e".repeat(64) };
+    expect(sentenceAudioMismatch(sentence, selection, nextConfiguration)).toBe("configuration");
+    expect(selection[sentence.id].assetId).toBe("b".repeat(32));
+    expect(currentSentenceAudio(sentence, selection, binding)?.assetId).toBe("b".repeat(32));
   });
   it("returns audio in current sentence order after reordering", () => {
     const next = { id: "sentence-002", text: "Next." };
     const selection = selectJobAudio({}, { ...readyJob, sentences: [...readyJob.sentences, { ...readyJob.sentences[0], ...next, assetId: "c".repeat(32) }] });
-    expect(getCompleteSpeechSelection([next, sentence], selection)?.map((audio) => audio.id)).toEqual([next.id, sentence.id]);
+    expect(getCompleteSpeechSelection([next, sentence], selection, binding)?.map((audio) => audio.id)).toEqual([next.id, sentence.id]);
   });
   it("treats opaque IDs as own keys without prototype collisions", () => {
     const unusual = { ...sentence, id: "__proto__" };
     const selection = selectJobAudio({}, { ...readyJob, sentences: [{ ...readyJob.sentences[0], ...unusual }] });
     expect(Object.getPrototypeOf(selection)).toBeNull();
-    expect(currentSentenceAudio(unusual, selection)?.assetId).toBe("b".repeat(32));
-    expect(currentSentenceAudio({ ...sentence, id: "constructor" }, {})).toBeNull();
+    expect(currentSentenceAudio(unusual, selection, binding)?.assetId).toBe("b".repeat(32));
+    expect(currentSentenceAudio({ ...sentence, id: "constructor" }, {}, binding)).toBeNull();
   });
   it.each([
     [], [{ ...sentence, text: " " }], [{ ...sentence, text: "x".repeat(4_001) }],

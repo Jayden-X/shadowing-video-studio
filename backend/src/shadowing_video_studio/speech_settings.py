@@ -87,13 +87,13 @@ class SpeechSettings:
             )
         return workspace, model
 
-    def fingerprint(self) -> str:
+    def fingerprint(self, voice: str = "Aiden") -> str:
         # Frozen revision + configuration, not private text or client-supplied identity.
         payload = {
-            "adapter": "qwen-cpu-v1",
+            "adapter": "qwen-cpu-v2",
             "model": str(self.model_path),
             "runtime": self.python_executable,
-            "voice": "Aiden",
+            "voice": voice,
             "language": "English",
             "backend": "cpu",
             "dtype": "float32",

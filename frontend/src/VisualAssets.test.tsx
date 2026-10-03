@@ -8,6 +8,7 @@ const backgroundId = "c".repeat(32);
 const existingIllustrationId = "d".repeat(32);
 const uploadedIllustrationId = "e".repeat(32);
 const exportId = "f".repeat(32);
+const speechBinding = { voice: "Aiden", configurationFingerprint: "a".repeat(64) };
 const visualStatus = {
   available: true,
   reason: null,
@@ -56,11 +57,13 @@ describe("visual asset workflow", () => {
         return json(registeredIllustration, 201);
       }
       if (url === "/api/speech/status") return json({ available: true, reason: null, voice: "Aiden", model: "Qwen3-TTS", backend: "cpu" });
+      if (url === "/api/speech/capabilities") return json({ available: true, reason: null, defaultVoice: "Aiden", model: "Qwen3-TTS", language: "English",
+        voices: [{ id: "Aiden", label: "Aiden", configurationFingerprint: speechBinding.configurationFingerprint }] });
       if (url === "/api/video/status") return json({ available: true, reason: null });
       if (url === "/api/speech/jobs") {
         const body = JSON.parse(init?.body as string) as { sentences: { id: string; text: string }[] };
-        return json({ id: "a".repeat(32), status: "completed", error: null, sentences: body.sentences.map((item) => ({
-          ...item, status: "ready", assetId: speechAssetId, durationSeconds: 1.5, error: null, reused: false,
+        return json({ id: "a".repeat(32), status: "completed", error: null, ...speechBinding, sentences: body.sentences.map((item) => ({
+          ...item, ...speechBinding, status: "ready", assetId: speechAssetId, durationSeconds: 1.5, error: null, reused: false,
         })) }, 202);
       }
       if (url === "/api/video/jobs") {
@@ -100,6 +103,7 @@ describe("visual asset workflow", () => {
     await act(async () => { fireEvent.click(button("Generate video")); });
 
     expect(submittedVideo).toEqual({
+      ...speechBinding,
       backgroundAssetId: backgroundId,
       sentences: [
         { id: "sentence-001", text: "Hello", assetId: speechAssetId, illustrationAssetId: uploadedIllustrationId },

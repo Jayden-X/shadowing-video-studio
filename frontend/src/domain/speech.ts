@@ -2,9 +2,10 @@ import { isWellFormedText, MAX_SENTENCE_LENGTH, MAX_SOURCE_LENGTH, type Sentence
 
 export const MAX_SPEECH_SENTENCES = 100;
 
-export type SpeechAudio = { id: string; text: string; assetId: string; durationSeconds: number; reused: boolean };
+export type SpeechBinding = { voice: string; configurationFingerprint: string };
+export type SpeechAudio = SpeechBinding & { id: string; text: string; assetId: string; durationSeconds: number; reused: boolean };
 export type SpeechSelection = Readonly<Record<string, SpeechAudio>>;
-export type SpeechSentence = {
+export type SpeechSentence = SpeechBinding & {
   id: string;
   text: string;
   status: "pending" | "generating" | "ready" | "failed";
@@ -13,7 +14,7 @@ export type SpeechSentence = {
   error: string | null;
   reused: boolean;
 };
-export type SpeechJob = {
+export type SpeechJob = SpeechBinding & {
   id: string;
   status: "queued" | "running" | "completed" | "failed";
   sentences: SpeechSentence[];
@@ -37,9 +38,11 @@ export function speechInputProblem(sentences: readonly SentenceItem[]): string |
   return null;
 }
 
-export function jobMatchesSnapshot(job: SpeechJob, snapshot: readonly SentenceItem[]): boolean {
+export function jobMatchesSnapshot(job: SpeechJob, snapshot: readonly SentenceItem[], binding: SpeechBinding): boolean {
+  if (job.voice !== binding.voice || job.configurationFingerprint !== binding.configurationFingerprint) return false;
   return job.sentences.length === snapshot.length && job.sentences.every((sentence, index) =>
-    sentence.id === snapshot[index].id && sentence.text === snapshot[index].text);
+    sentence.id === snapshot[index].id && sentence.text === snapshot[index].text
+      && sentence.voice === binding.voice && sentence.configurationFingerprint === binding.configurationFingerprint);
 }
 
 export function selectJobAudio(selection: SpeechSelection, job: SpeechJob): SpeechSelection {
@@ -49,20 +52,40 @@ export function selectJobAudio(selection: SpeechSelection, job: SpeechJob): Spee
       next[sentence.id] = {
         id: sentence.id, text: sentence.text, assetId: sentence.assetId,
         durationSeconds: sentence.durationSeconds, reused: sentence.reused,
+        voice: sentence.voice, configurationFingerprint: sentence.configurationFingerprint,
       };
     }
   }
   return next;
 }
 
-export function currentSentenceAudio(sentence: SentenceItem, selection: SpeechSelection): SpeechAudio | null {
+export function sentenceAudioMismatch(
+  sentence: SentenceItem,
+  selection: SpeechSelection,
+  binding: SpeechBinding | null,
+): "text" | "voice" | "configuration" | null {
   const audio = Object.hasOwn(selection, sentence.id) ? selection[sentence.id] : undefined;
-  return audio?.text === sentence.text ? audio : null;
+  if (!audio) return null;
+  if (audio.text !== sentence.text) return "text";
+  if (!binding || audio.voice !== binding.voice) return "voice";
+  if (audio.configurationFingerprint !== binding.configurationFingerprint) return "configuration";
+  return null;
+}
+
+export function currentSentenceAudio(sentence: SentenceItem, selection: SpeechSelection, binding: SpeechBinding | null): SpeechAudio | null {
+  return sentenceAudioMismatch(sentence, selection, binding) === null
+    ? (Object.hasOwn(selection, sentence.id) ? selection[sentence.id] : null)
+    : null;
 }
 
 // Video rendering consumes this complete ordered mapping, never a stale or partial job.
-export function getCompleteSpeechSelection(sentences: readonly SentenceItem[], selection: SpeechSelection): SpeechAudio[] | null {
+export function getCompleteSpeechSelection(
+  sentences: readonly SentenceItem[],
+  selection: SpeechSelection,
+  binding: SpeechBinding | null,
+): SpeechAudio[] | null {
   if (speechInputProblem(sentences)) return null;
-  const audio = sentences.map((sentence) => currentSentenceAudio(sentence, selection));
+  if (binding === null) return null;
+  const audio = sentences.map((sentence) => currentSentenceAudio(sentence, selection, binding));
   return audio.every((item) => item !== null) ? audio : null;
 }

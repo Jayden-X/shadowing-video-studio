@@ -5,25 +5,36 @@ import App from "./App";
 const jobId = "a".repeat(32);
 const firstAsset = "b".repeat(32);
 const nextAsset = "c".repeat(32);
+const defaultBinding = { voice: "Aiden", configurationFingerprint: "f".repeat(64) };
+const alternateBinding = { voice: "voice-2", configurationFingerprint: "e".repeat(64) };
+const capabilities = { available: true, reason: null, defaultVoice: "Aiden", model: "Qwen3-TTS-12Hz-0.6B-CustomVoice", language: "English",
+  voices: [{ id: "Aiden", label: "Aiden", configurationFingerprint: defaultBinding.configurationFingerprint },
+    { id: alternateBinding.voice, label: "Alternative voice", configurationFingerprint: alternateBinding.configurationFingerprint }] };
+type CapabilityFixture = Omit<typeof capabilities, "defaultVoice"> & { defaultVoice: string | null };
 type Snapshot = { id: string; text: string }[];
-function job(snapshot: Snapshot, status: "completed" | "running" | "failed" = "completed", asset = firstAsset) {
-  return { id: jobId, status, error: status === "failed" ? "raw private detail" : null,
+function job(snapshot: Snapshot, status: "completed" | "running" | "failed" = "completed", asset = firstAsset,
+  binding = defaultBinding, reused = false) {
+  return { id: jobId, status, error: status === "failed" ? "raw private detail" : null, ...binding,
     sentences: snapshot.map((sentence, index) => ({ ...sentence,
+      ...binding,
       status: status === "running" ? (index === 0 ? "generating" : "pending") : status === "failed" && index === 1 ? "failed" : "ready",
       assetId: status === "running" || (status === "failed" && index === 1) ? null : asset,
       durationSeconds: status === "running" || (status === "failed" && index === 1) ? null : 1.5,
-      error: status === "failed" && index === 1 ? "raw private detail" : null, reused: false,
+      error: status === "failed" && index === 1 ? "raw private detail" : null, reused,
     })) };
 }
 function json(value: unknown, status = 200) { return new Response(JSON.stringify(value), { status }); }
-function mockSpeech(create: (snapshot: Snapshot, force: boolean, init: RequestInit | undefined) => Response | Promise<Response>,
-  poll: (init: RequestInit | undefined) => Response | Promise<Response> = () => json({})) {
+function mockSpeech(create: (snapshot: Snapshot, force: boolean, init: RequestInit | undefined, binding: typeof defaultBinding) => Response | Promise<Response>,
+  poll: (init: RequestInit | undefined) => Response | Promise<Response> = () => json({}),
+  capabilityResponse: CapabilityFixture = capabilities) {
   const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
     if (url === "/api/speech/status") return json({ available: true, reason: null, voice: "Aiden", model: "Qwen3-TTS-12Hz-0.6B-CustomVoice", backend: "cpu" });
+    if (url === "/api/speech/capabilities") return json(capabilityResponse);
+    if (url === "/api/video/status") return json({ available: true, reason: null });
     if (url === "/api/text/providers") return json({ providers: ["codex", "deepseek"].map((id) => ({ id, label: id, available: false, reason: "unavailable" })) });
     if (url === "/api/speech/jobs") {
-      const body = JSON.parse(init?.body as string) as { sentences: Snapshot; force: boolean };
-      return create(body.sentences, body.force, init);
+      const body = JSON.parse(init?.body as string) as { sentences: Snapshot; force: boolean } & typeof defaultBinding;
+      return create(body.sentences, body.force, init, { voice: body.voice, configurationFingerprint: body.configurationFingerprint });
     }
     if (url === `/api/speech/jobs/${jobId}`) return poll(init);
     return json({ status: "ok" });
@@ -57,7 +68,7 @@ describe("sentence speech UI", () => {
     expect(previews()[0].getAttribute("src")).toBe(`/api/speech/assets/${nextAsset}`);
     expect(previews()[1].getAttribute("src")).toBe(`/api/speech/assets/${firstAsset}`);
     const posts = fetchMock.mock.calls.filter(([url]) => url === "/api/speech/jobs");
-    expect(JSON.parse(posts[1][1]?.body as string)).toEqual({ sentences: [{ id: "sentence-001", text: "Hello." }], force: true });
+    expect(JSON.parse(posts[1][1]?.body as string)).toEqual({ sentences: [{ id: "sentence-001", text: "Hello." }], force: true, ...defaultBinding });
     expect(sentence(1).value).toBe("Hello.");
   });
   it("shows reused audio and invalidates edited, merged, deleted, and replaced content", async () => {
@@ -79,6 +90,51 @@ describe("sentence speech UI", () => {
     fireEvent.click(button("Replace and prepare"));
     expect(previews()).toHaveLength(0);
   });
+  it("selects only advertised voices and keeps audio bound to the selected configuration", async () => {
+    const voiceRuns = new Map<string, number>();
+    const fetchMock = mockSpeech((snapshot, _force, _init, binding) => {
+      const run = (voiceRuns.get(binding.voice) ?? 0) + 1;
+      voiceRuns.set(binding.voice, run);
+      const asset = binding.voice === "Aiden" ? firstAsset : nextAsset;
+      return json(job(snapshot, "completed", asset, binding, run > 1), 202);
+    });
+    render(<App />);
+    await prepare("Hello.");
+    const voiceSelect = screen.getByRole("combobox", { name: "Speech voice" }) as HTMLSelectElement;
+    expect(voiceSelect.value).toBe("Aiden");
+    await act(async () => { fireEvent.click(button("Generate speech")); });
+    expect(previews()).toHaveLength(1);
+
+    const speechCallsBeforeSelection = fetchMock.mock.calls.filter(([url]) => url === "/api/speech/jobs").length;
+    fireEvent.change(voiceSelect, { target: { value: alternateBinding.voice } });
+    expect(fetchMock.mock.calls.filter(([url]) => url === "/api/speech/jobs")).toHaveLength(speechCallsBeforeSelection);
+    expect(previews()).toHaveLength(0);
+    expect(screen.getByText(/Audio uses Aiden voice/)).toBeTruthy();
+    expect(button("Generate video").disabled).toBe(true);
+    await act(async () => { fireEvent.click(button("Generate speech")); });
+    expect(previews()[0].getAttribute("src")).toBe(`/api/speech/assets/${nextAsset}`);
+    const alternatePost = JSON.parse(fetchMock.mock.calls.filter(([url]) => url === "/api/speech/jobs")[1][1]?.body as string) as Record<string, unknown>;
+    expect(alternatePost).toMatchObject(alternateBinding);
+
+    fireEvent.change(voiceSelect, { target: { value: "Aiden" } });
+    expect(previews()).toHaveLength(0);
+    await act(async () => { fireEvent.click(button("Generate speech")); });
+    expect(previews()[0].getAttribute("src")).toBe(`/api/speech/assets/${firstAsset}`);
+    expect(screen.getAllByText(/Reused/)).toHaveLength(1);
+    expect(button("Generate video").disabled).toBe(false);
+  });
+  it("requires an explicit voice choice when the backend has no default", async () => {
+    const noDefault = { ...capabilities, defaultVoice: null };
+    const fetchMock = mockSpeech((snapshot, _force, _init, binding) => json(job(snapshot, "completed", firstAsset, binding), 202), () => json({}), noDefault);
+    render(<App />);
+    await prepare("Hello.");
+    const voiceSelect = screen.getByRole("combobox", { name: "Speech voice" }) as HTMLSelectElement;
+    expect(voiceSelect.value).toBe("");
+    expect(button("Generate speech").disabled).toBe(true);
+    fireEvent.change(voiceSelect, { target: { value: alternateBinding.voice } });
+    expect(button("Generate speech").disabled).toBe(false);
+    expect(fetchMock.mock.calls.filter(([url]) => url === "/api/speech/jobs")).toHaveLength(0);
+  });
   it("preserves partial success and hides raw provider errors", async () => {
     mockSpeech((snapshot) => json(job(snapshot, "failed"), 202));
     render(<App />);
@@ -97,6 +153,7 @@ describe("sentence speech UI", () => {
     render(<App />);
     await prepare();
     await act(async () => { fireEvent.click(button("Generate speech")); fireEvent.click(button("Generate speech")); });
+    expect((screen.getByRole("combobox", { name: "Speech voice" }) as HTMLSelectElement).disabled).toBe(true);
     expect(sentence(1).disabled).toBe(true);
     expect(button("Add sentence").disabled).toBe(true);
     expect(button("Prepare sentences").disabled).toBe(true);
@@ -125,6 +182,7 @@ describe("sentence speech UI", () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
     fireEvent.click(button("Stop waiting for speech"));
     expect(pollSignal?.aborted).toBe(true);
+    expect((screen.getByRole("combobox", { name: "Speech voice" }) as HTMLSelectElement).disabled).toBe(true);
     expect(sentence(1).disabled).toBe(false);
     expect(button("Generate speech").disabled).toBe(true);
     expect(screen.getByText(/does not cancel generation/)).toBeTruthy();
@@ -235,6 +293,7 @@ describe("sentence speech UI", () => {
     let available = false;
     const fetchMock = vi.fn(async (url: string) => {
       if (url === "/api/speech/status") return json({ available, reason: available ? null : "unavailable", voice: "Aiden", model: "model", backend: "cpu" });
+      if (url === "/api/speech/capabilities") return json({ ...capabilities, available, reason: available ? null : "unavailable" });
       if (url === "/api/text/providers") return json({ providers: ["codex", "deepseek"].map((id) => ({ id, label: id, available: false, reason: "unavailable" })) });
       return json({ status: "ok" });
     });

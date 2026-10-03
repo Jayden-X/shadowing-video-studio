@@ -9,7 +9,15 @@ from fastapi.exceptions import RequestValidationError
 
 from shadowing_video_studio.main import invalid_request
 from shadowing_video_studio.providers.process import ProcessResult
-from shadowing_video_studio.speech import HeavyJobGate, SpeechError, SpeechReadiness, SpeechSentence
+from shadowing_video_studio.speech import (
+    VOICE,
+    HeavyJobGate,
+    SpeechCapabilities,
+    SpeechError,
+    SpeechReadiness,
+    SpeechSentence,
+    SpeechVoice,
+)
 from shadowing_video_studio.speech_assets import SpeechAssets
 from shadowing_video_studio.speech_jobs import SpeechJobs
 from shadowing_video_studio.video_api import get_video_service, router
@@ -71,7 +79,19 @@ class FakeSpeech:
     async def readiness(self):
         return SpeechReadiness(True)
 
-    async def generate(self, _text, _destination):
+    async def capabilities(self):
+        voices = tuple(
+            SpeechVoice(identifier, identifier, self.fingerprint_for_voice(identifier))
+            for identifier in ("Aiden", "Ryan")
+        )
+        return SpeechCapabilities(True, voices=voices, default_voice=VOICE)
+
+    def fingerprint_for_voice(self, voice):
+        if voice == VOICE:
+            return self.fingerprint
+        return hashlib.sha256(f"{self.fingerprint}:{voice}".encode()).hexdigest()
+
+    async def generate(self, _text, _destination, voice=VOICE):
         raise AssertionError("Video must not generate speech.")
 
     async def close(self):
@@ -274,6 +294,32 @@ def test_missing_stale_or_changed_bindings_rejected_before_renderer(tmp_path):
                 assert (
                     await client.post("/api/video/jobs", json={"sentences": rows})
                 ).status_code == 404
+                assert not renderer.calls and not service.gate.busy
+                assert not (tmp_path / "video").exists()
+        finally:
+            await service.close()
+            await service.speech.close()
+
+    asyncio.run(scenario())
+
+
+def test_video_rejects_audio_that_does_not_match_selected_voice(tmp_path):
+    async def scenario():
+        service, renderer, rows = fixture_service(tmp_path)
+        try:
+            async with client_for(service) as client:
+                response = await client.post(
+                    "/api/video/jobs",
+                    json={
+                        "sentences": rows,
+                        "voice": "Ryan",
+                        "configurationFingerprint": service.speech.provider.fingerprint_for_voice(
+                            "Ryan"
+                        ),
+                    },
+                )
+                assert response.status_code == 409
+                assert "audio" in response.json()["detail"].lower()
                 assert not renderer.calls and not service.gate.busy
                 assert not (tmp_path / "video").exists()
         finally:

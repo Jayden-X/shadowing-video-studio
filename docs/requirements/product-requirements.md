@@ -161,13 +161,14 @@ See [Task 009](../../tasks/done/009-local-visual-library.md) for acceptance and 
 
 - Provide a UI list of voices actually supported by the configured local TTS model/runtime,
   with Aiden as the current default.
+- The selected voice applies to the whole document; per-sentence overrides are deferred.
 - Make the selected voice explicit in generation requests and progress/result bindings.
   Changing voice makes existing mismatched audio ineligible for the current selection;
   keep earlier WAV files intact and require explicit generation for the selected voice.
 - Freeze the voice with the sentence text, language, model revision and effective generation
   configuration. Include it in safe audio-reuse checks; never silently substitute a voice.
 
-See [Task 010](../../tasks/backlog/010-tts-voice-selection.md). The local visual folder/list
+See [Task 010](../../tasks/done/010-tts-voice-selection.md). The local visual folder/list
 interaction can inform this selector's UI; supported voices are provider capabilities.
 
 ### P3 — Audio reuse across browser/service restarts

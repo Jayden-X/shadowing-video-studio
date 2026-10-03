@@ -1,8 +1,9 @@
 import asyncio
+import io
 import json
 import sys
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
@@ -14,7 +15,8 @@ from shadowing_video_studio.speech_assets import SpeechAssets
 from shadowing_video_studio.speech_settings import MODEL_REVISION, SpeechSettings
 
 
-def settings_fixture(tmp_path):
+def settings_fixture(tmp_path, speakers=None):
+    speakers = {"aiden": 0, "ryan": 1} if speakers is None else speakers
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     model = tmp_path / "cache" / MODEL_REVISION
@@ -25,6 +27,7 @@ def settings_fixture(tmp_path):
                 "model_type": "qwen3_tts",
                 "tts_model_type": "custom_voice",
                 "tts_model_size": "0b6",
+                "talker_config": {"spk_id": speakers},
             }
         )
     )
@@ -54,6 +57,35 @@ def test_readiness_does_not_load_model_or_write_runtime(tmp_path, monkeypatch):
     )
     assert not asyncio.run(QwenSpeechProvider(bad).readiness()).available
     assert len(calls) == 1
+
+
+def test_capabilities_read_only_frozen_speaker_config_without_loading_model(tmp_path, monkeypatch):
+    async def probe(_runner, _arguments, **_options):
+        return ProcessResult(0, b'{"available":true}')
+
+    monkeypatch.setattr(qwen.SubprocessRunner, "run", probe)
+    settings = settings_fixture(tmp_path)
+    provider = QwenSpeechProvider(settings, SpeechAssets(settings.workspace))
+    capabilities = asyncio.run(provider.capabilities())
+    assert capabilities.available and capabilities.reason is None
+    assert capabilities.default_voice == "Aiden"
+    assert [(voice.id, voice.label) for voice in capabilities.voices] == [
+        ("Aiden", "Aiden"),
+        ("Ryan", "Ryan"),
+    ]
+    assert all(len(voice.configuration_fingerprint) == 64 for voice in capabilities.voices)
+    assert provider._process is None
+    assert list(settings.workspace.iterdir()) == []
+
+    config_path = settings.model_path / "config.json"
+    config = json.loads(config_path.read_bytes())
+    config["talker_config"]["spk_id"] = {"Invalid Voice": 0}
+    config_path.write_text(json.dumps(config))
+    unavailable = asyncio.run(provider.capabilities())
+    assert not unavailable.available and unavailable.reason
+    assert unavailable.voices == () and unavailable.default_voice is None
+    assert provider._process is None
+    assert list(settings.workspace.iterdir()) == []
 
 
 def test_verified_generation_requires_eos_and_restores_vendor_method():
@@ -163,11 +195,12 @@ def test_persistent_worker_uses_stdin_and_scoped_environment(tmp_path, monkeypat
         worker = FakeWorker()
         calls = install_worker(monkeypatch, worker)
         provider = QwenSpeechProvider(settings, assets)
-        for source in ("First.", "Second."):
+        for source, voice in (("First.", "Aiden"), ("Second.", "Ryan")):
             _, path = assets.allocate()
-            await provider.generate(source, path)
+            await provider.generate(source, path, voice)
         assert len(calls) == 1  # One process/model across sentences.
         assert [item["text"] for item in worker.stdin.requests] == ["First.", "Second."]
+        assert [item["voice"] for item in worker.stdin.requests] == ["Aiden", "Ryan"]
         arguments, options = calls[0]
         assert "First." not in arguments and "shell" not in options
         assert arguments[1:3] == ("-I", "-B")
@@ -180,6 +213,95 @@ def test_persistent_worker_uses_stdin_and_scoped_environment(tmp_path, monkeypat
         assert worker.returncode is not None and worker.waited and worker.stdin.closed
 
     asyncio.run(scenario())
+
+
+def test_worker_forwards_supported_speaker_and_skips_unsupported_synthesis(tmp_path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    runtime = workspace / "speech" / "session" / "runtime"
+    runtime.mkdir(parents=True)
+    model_path = tmp_path / "model"
+    model_path.mkdir()
+    supported_destination = runtime.parent / "supported.wav"
+    unsupported_destination = runtime.parent / "unsupported.wav"
+    assert supported_destination.parent.resolve() == runtime.parent
+    requests = [
+        {
+            "text": "Unsupported voice.",
+            "destination": str(unsupported_destination),
+            "voice": "Ghost",
+        },
+        {"text": "Supported voice.", "destination": str(supported_destination), "voice": "Ryan"},
+    ]
+
+    class FakeInput:
+        def __init__(self):
+            self.buffer = io.BytesIO(
+                b"".join(json.dumps(request).encode() + b"\n" for request in requests)
+            )
+
+    class FakeOutput:
+        def fileno(self):
+            return 9321
+
+    class FakeProtocol:
+        def __init__(self):
+            self.lines = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def write(self, line):
+            self.lines.append(line)
+
+        def flush(self):
+            pass
+
+    class FakeModel:
+        def get_supported_speakers(self):
+            return ["aiden", "ryan"]
+
+    model = FakeModel()
+    loads = []
+    torch_calls = []
+    qwen_package = ModuleType("qwen_tts")
+
+    class FakeQwenModel:
+        @classmethod
+        def from_pretrained(cls, *_args, **_kwargs):
+            loads.append(True)
+            return model
+
+    qwen_package.Qwen3TTSModel = FakeQwenModel
+    torch_package = ModuleType("torch")
+    torch_package.set_num_threads = lambda count: torch_calls.append(count)
+    torch_package.float32 = object()
+    monkeypatch.setitem(sys.modules, "qwen_tts", qwen_package)
+    monkeypatch.setitem(sys.modules, "torch", torch_package)
+
+    protocol = FakeProtocol()
+    writes = []
+
+    def write_verified(_model, text, destination, voice):
+        writes.append((text, destination, voice))
+
+    monkeypatch.setattr(qwen_worker, "write_verified_audio", write_verified)
+    monkeypatch.setattr(qwen_worker.sys, "stdin", FakeInput())
+    monkeypatch.setattr(qwen_worker.sys, "stdout", FakeOutput())
+    monkeypatch.setattr(qwen_worker.os, "dup", lambda _descriptor: 9322)
+    monkeypatch.setattr(qwen_worker.os, "fdopen", lambda *_args, **_options: protocol)
+    monkeypatch.setattr(qwen_worker.os, "dup2", lambda *_args: None)
+
+    qwen_worker.serve(model_path, runtime)
+
+    assert [json.loads(line) for line in protocol.lines] == [
+        {"ok": False, "error": "voice"},
+        {"ok": True},
+    ]
+    assert len(loads) == 1 and torch_calls == [4]
+    assert writes == [("Supported voice.", supported_destination, "Ryan")]
 
 
 def test_worker_timeout_cancellation_overflow_and_dead_start_cleanup(tmp_path, monkeypatch):

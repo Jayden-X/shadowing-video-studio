@@ -1,7 +1,10 @@
 # Local sentence speech runtime
 
 Task 006 uses the approved official Qwen3-TTS 0.1.1 CPU path: frozen
-`Qwen3-TTS-12Hz-0.6B-CustomVoice`, float32, eager attention, English/Aiden.
+`Qwen3-TTS-12Hz-0.6B-CustomVoice`, float32, eager attention, English with Aiden as the
+initial voice when supported. Task010 adds document-level selection from the configured
+model's voices. Aiden and Ryan generation/reuse and Ryan video export have passed actual
+Mac checks. The owner accepted Ryan listening and the browser workflow on 2026-10-04.
 There is no automatic model download, runtime installation, backend fallback or MPS optimization.
 The approved revision is `85e237c12c027371202489a0ec509ded67b5e4b5`;
 a different revision requires explicit validation/selection before changing the adapter.
@@ -57,8 +60,15 @@ pronunciation, transcript completeness or voice quality: listen before using the
 ## API and reuse
 
 - `GET /api/speech/status`: safe availability/reason and voice/model/backend.
-- `POST /api/speech/jobs`: explicit frozen `[{id,text}]`, optional `force`; returns 202 Job.
+- `GET /api/speech/capabilities`: safe availability/reason, model/language, `defaultVoice`
+  and `voices:[{id,label,configurationFingerprint}]`. Aiden is the default only if supported;
+  otherwise `defaultVoice` is null and the user must choose. No model inference occurs.
+- `POST /api/speech/jobs`: explicit frozen `[{id,text}]`, optional `force`, `voice` and
+  `configurationFingerprint`; returns 202 Job. The browser sends both binding fields.
+  Unsupported voices return 422; stale configuration fingerprints return 409. Existing
+  callers that omit them use Aiden, which is still validated rather than substituted.
 - `GET /api/speech/jobs/{id}`: queued/running/completed/failed, with per-sentence progress.
+  Job and sentence rows include the frozen `voice` and `configurationFingerprint`.
 - `GET /api/speech/assets/{id}`: validated WAV bytes, never a client path.
 
 Speech routes require a loopback Host and, when the browser supplies Origin, a loopback
@@ -76,10 +86,18 @@ There are at most 100 jobs and 1 GiB of reserved/generated media per service ses
 Failed attempts reserve their maximum allocation, preventing repeated failures from bypassing
 the ceiling. No automatic pruning/deletion is introduced.
 
-Reuse requires **exact sentence ID + exact text + provider configuration fingerprint**.
+Reuse requires **exact sentence ID + exact text + exact voice + effective provider
+configuration fingerprint**. The fingerprint binds English, selected voice, frozen model
+revision, runtime and effective CPU generation settings. The Qwen adapter reads supported
+speaker metadata from the local snapshot's `talker_config.spk_id`, matching the official
+[speaker capability source](https://github.com/QwenLM/Qwen3-TTS/blob/main/qwen_tts/core/models/modeling_qwen3_tts.py).
+It checks the existing runtime without loading weights; the generation worker independently
+validates the chosen speaker against the loaded model before inference.
 Regeneration produces a new asset and preserves prior WAVs. Editing/replacing text prevents
 matching the old binding; the UI must clear ineligible selections. Task 007 must call
-`SpeechAssets.match(asset_id, SpeechSentence(id,text), fingerprint)` before rendering.
+`SpeechAssets.match(asset_id, SpeechSentence(id,text), fingerprint, voice)` before rendering.
+Video requests carry the selected `voice` and `configurationFingerprint`; server-side
+validation rejects mismatched audio even if a client submits its old asset ID.
 This checks bindings, file boundaries and recorded content hash. The shared `HeavyJobGate`
 must also coordinate future video rendering; it is not a cross-process lock.
 
@@ -92,7 +110,7 @@ The owner assigned validated reuse across restart to P3
 [Task 008](../../tasks/backlog/008-restart-audio-reuse.md): frontend-cached association keys
 plus trusted backend metadata/file validation. This is a planned optimization; the restart
 behavior described above still applies. P2 supported-voice selection is tracked in
-[Task 010](../../tasks/backlog/010-tts-voice-selection.md).
+[Task 010](../../tasks/done/010-tts-voice-selection.md).
 
 Official behavior references: [Qwen wrapper](https://github.com/QwenLM/Qwen3-TTS/blob/main/qwen_tts/inference/qwen3_tts_model.py)
 and [talker generation](https://github.com/QwenLM/Qwen3-TTS/blob/main/qwen_tts/core/models/modeling_qwen3_tts.py).

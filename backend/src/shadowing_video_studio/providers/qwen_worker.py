@@ -59,7 +59,7 @@ def probe() -> dict[str, object]:
         return {"available": False}
 
 
-def generate_verified(model, text: str):
+def generate_verified(model, text: str, voice: str = "Aiden"):
     """Observe the original talker result, restoring its method on every path.
 
     qwen-tts 0.1.1 discards EOS evidence when returning decoded WAVs. The
@@ -95,7 +95,7 @@ def generate_verified(model, text: str):
         result = model.generate_custom_voice(
             text=text,
             language="English",
-            speaker="Aiden",
+            speaker=voice,
             non_streaming_mode=True,
             max_new_tokens=MAX_NEW_TOKENS,
         )
@@ -106,11 +106,11 @@ def generate_verified(model, text: str):
         talker.generate = original
 
 
-def write_verified_audio(model, text: str, destination: Path) -> None:
+def write_verified_audio(model, text: str, destination: Path, voice: str = "Aiden") -> None:
     import numpy as np
     import soundfile as sf
 
-    wavs, sample_rate = generate_verified(model, text)
+    wavs, sample_rate = generate_verified(model, text, voice)
     if not isinstance(wavs, list) or len(wavs) != 1 or sample_rate != 24000:
         raise IncompleteSpeech
     audio = np.asarray(wavs[0])
@@ -140,8 +140,10 @@ def serve(model_path: Path, runtime: Path) -> None:
                         return
                     try:
                         request = json.loads(raw)
-                        if set(request) != {"text", "destination"} or not isinstance(
-                            request["text"], str
+                        if (
+                            set(request) != {"text", "destination", "voice"}
+                            or not isinstance(request["text"], str)
+                            or not isinstance(request["voice"], str)
                         ):
                             raise ValueError
                         destination = Path(request["destination"])
@@ -166,8 +168,14 @@ def serve(model_path: Path, runtime: Path) -> None:
                                 local_files_only=True,
                                 trust_remote_code=False,
                             )
-                        write_verified_audio(model, request["text"], destination)
-                        result = {"ok": True}
+                        speakers = model.get_supported_speakers() or []
+                        if request["voice"].lower() not in speakers:
+                            result = {"ok": False, "error": "voice"}
+                        else:
+                            write_verified_audio(
+                                model, request["text"], destination, request["voice"]
+                            )
+                            result = {"ok": True}
                     except IncompleteSpeech:
                         result = {"ok": False, "error": "incomplete"}
                     except Exception:

@@ -1,16 +1,19 @@
 import { useEffect, useRef, useState } from "react";
 import type { SentenceItem } from "./domain/sentences";
-import { selectJobAudio, type SpeechJob, type SpeechSelection } from "./domain/speech";
-import { createSpeechJob, getSpeechJob, getSpeechStatus, SpeechApiError, type SpeechStatus } from "./speechApi";
+import { selectJobAudio, type SpeechBinding, type SpeechJob, type SpeechSelection } from "./domain/speech";
+import { createSpeechJob, getSpeechCapabilities, getSpeechJob, getSpeechStatus, SpeechApiError,
+  type SpeechCapabilities, type SpeechStatus } from "./speechApi";
 
 const POLL_INTERVAL_MS = 1_000;
 const WAIT_LIMIT_MS = 15 * 60_000;
 const STATUS_LIMIT_MS = 15_000;
 
-type Attempt = { snapshot: SentenceItem[]; scope: number; jobId: string | null };
+type Attempt = { snapshot: SentenceItem[]; binding: SpeechBinding; scope: number; jobId: string | null };
 
 export function useSpeech() {
   const [readiness, setReadiness] = useState<SpeechStatus | null>(null);
+  const [capabilities, setCapabilities] = useState<SpeechCapabilities | null>(null);
+  const [selectedVoice, setSelectedVoice] = useState("");
   const [checking, setChecking] = useState(true);
   const [selection, setSelection] = useState<SpeechSelection>({});
   const [job, setJob] = useState<SpeechJob | null>(null);
@@ -26,6 +29,7 @@ export function useSpeech() {
   const waitTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const availabilityController = useRef<AbortController | null>(null);
   const availabilitySequence = useRef(0);
+  const capabilitiesLoaded = useRef(false);
   const availabilityTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   function clearTimers() {
@@ -43,10 +47,21 @@ export function useSpeech() {
     const token = ++availabilitySequence.current;
     setChecking(true);
     availabilityTimer.current = setTimeout(() => availability.abort(), STATUS_LIMIT_MS);
-    getSpeechStatus(availability.signal).then((status) => {
-      if (mounted.current && token === availabilitySequence.current && !availability.signal.aborted) setReadiness(status);
+    Promise.all([getSpeechStatus(availability.signal), getSpeechCapabilities(availability.signal)]).then(([status, nextCapabilities]) => {
+      if (!mounted.current || token !== availabilitySequence.current || availability.signal.aborted) return;
+      setReadiness(status);
+      setCapabilities(nextCapabilities);
+      const firstCapabilities = !capabilitiesLoaded.current;
+      capabilitiesLoaded.current = true;
+      setSelectedVoice((current) => {
+        if (!firstCapabilities) return nextCapabilities.voices.some((voice) => voice.id === current) ? current : "";
+        return nextCapabilities.defaultVoice ?? "";
+      });
     }).catch(() => {
-      if (mounted.current && token === availabilitySequence.current) setReadiness(null);
+      if (mounted.current && token === availabilitySequence.current) {
+        setReadiness(null);
+        setCapabilities(null);
+      }
     }).finally(() => {
       if (token !== availabilitySequence.current) return;
       if (availabilityTimer.current !== null) clearTimeout(availabilityTimer.current);
@@ -129,7 +144,7 @@ export function useSpeech() {
 
   async function poll(current: Attempt, token: number, signal: AbortSignal) {
     if (!current.jobId || signal.aborted || token !== sequence.current) return;
-    try { receive(await getSpeechJob(current.jobId, current.snapshot, signal), current, token, signal); }
+    try { receive(await getSpeechJob(current.jobId, current.snapshot, current.binding, signal), current, token, signal); }
     catch (errorValue: unknown) { fail(errorValue, token, signal); }
   }
 
@@ -145,12 +160,14 @@ export function useSpeech() {
   }
 
   async function generate(sentences: readonly SentenceItem[], force = false) {
-    if (controller.current || attempt.current || !readiness?.available) return;
-    const current: Attempt = { snapshot: sentences.map(({ id, text }) => ({ id, text })), scope: scope.current, jobId: null };
+    const voice = capabilities?.voices.find((item) => item.id === selectedVoice);
+    if (controller.current || attempt.current || !readiness?.available || !capabilities?.available || !voice) return;
+    const binding: SpeechBinding = { voice: voice.id, configurationFingerprint: voice.configurationFingerprint };
+    const current: Attempt = { snapshot: sentences.map(({ id, text }) => ({ id, text })), binding, scope: scope.current, jobId: null };
     attempt.current = current;
     setJob(null);
     const { token, signal } = beginWaiting();
-    try { receive(await createSpeechJob(current.snapshot, force, signal), current, token, signal); }
+    try { receive(await createSpeechJob(current.snapshot, force, current.binding, signal), current, token, signal); }
     catch (errorValue: unknown) { fail(errorValue, token, signal); }
   }
 
@@ -161,7 +178,19 @@ export function useSpeech() {
     void poll(current, token, signal);
   }
 
+  function chooseVoice(voice: string) {
+    if (controller.current || attempt.current) return;
+    if (voice === "" || capabilities?.voices.some((item) => item.id === voice)) {
+      setSelectedVoice(voice);
+      setError("");
+      setNotice(voice ? `Selected ${capabilities?.voices.find((item) => item.id === voice)?.label ?? "voice"}. Generate speech to create or reuse audio for this voice.` : "Choose a supported voice before generating speech.");
+    }
+  }
+
   const outstanding = attempt.current !== null;
-  return { readiness, checking, selection, job, waiting, outstanding, error, notice,
+  const selected = capabilities?.voices.find((voice) => voice.id === selectedVoice);
+  const binding = selected ? { voice: selected.id, configurationFingerprint: selected.configurationFingerprint } : null;
+  return { readiness, capabilities, selectedVoice, binding, checking, selection, job, waiting, outstanding, error, notice,
+    chooseVoice,
     generate, stopWaiting, resumeMonitoring, resetSelection, refreshReadiness };
 }

@@ -37,13 +37,34 @@ class SpeechSentence:
     text: str
 
 
+@dataclass(frozen=True)
+class SpeechVoice:
+    id: str
+    label: str
+    configuration_fingerprint: str
+
+
+@dataclass(frozen=True)
+class SpeechCapabilities:
+    available: bool
+    reason: str | None = None
+    voices: tuple[SpeechVoice, ...] = ()
+    default_voice: str | None = None
+    model: str = MODEL_NAME
+    language: str = "English"
+
+
 class SpeechProvider(Protocol):
     @property
     def fingerprint(self) -> str: ...
 
     async def readiness(self) -> SpeechReadiness: ...
 
-    async def generate(self, text: str, destination: Path) -> None: ...
+    async def capabilities(self) -> SpeechCapabilities: ...
+
+    def fingerprint_for_voice(self, voice: str) -> str: ...
+
+    async def generate(self, text: str, destination: Path, voice: str = VOICE) -> None: ...
 
     async def close(self) -> None: ...
 
