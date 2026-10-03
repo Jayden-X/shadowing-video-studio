@@ -7,6 +7,7 @@ import os
 import shutil
 import stat
 import uuid
+from collections.abc import Sequence
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,15 +20,18 @@ from shadowing_video_studio.video_rendering import (
     MAX_VIDEO_ASSET_BYTES,
     MAX_VIDEO_JOB_BYTES,
     FrozenVideoSentence,
+    FrozenVisualAsset,
     RenderedVideo,
     VideoRenderer,
     VideoRenderingError,
     video_timeline,
 )
 from shadowing_video_studio.video_settings import VideoSettings, VideoToolPreflight
+from shadowing_video_studio.visual_assets import EXTENSIONS, VisualAssetError, VisualLibrary
 
 MAX_VIDEO_JOBS = 20
 MAX_VIDEO_INPUT_BYTES = 64 * 1024 * 1024
+MAX_VIDEO_VISUAL_BYTES = 64 * 1024 * 1024
 MAX_VIDEO_SESSION_BYTES = 2 * 1024 * 1024 * 1024
 MAX_VIDEO_SECONDS = 600
 
@@ -44,6 +48,7 @@ class VideoSentenceSelection:
     id: str
     text: str
     asset_id: str
+    illustration_asset_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -95,11 +100,13 @@ class VideoJobs:
         speech: SpeechJobs,
         renderer: VideoRenderer | None = None,
         tool_preflight: VideoToolPreflight | None = None,
+        visuals: VisualLibrary | None = None,
     ) -> None:
         self.settings = settings
         self.speech = speech
         self.gate = speech.gate
         self.renderer = renderer
+        self.visuals = visuals
         self._tool_preflight = tool_preflight or VideoToolPreflight()
         self._jobs: dict[str, dict] = {}
         self._assets: dict[str, VideoAsset] = {}
@@ -127,7 +134,54 @@ class VideoJobs:
                 "reason": "Check the configured local video tools and workspace.",
             }
 
-    async def submit(self, selections: list[VideoSentenceSelection]) -> dict:
+    def _freeze_visuals(
+        self, selections: Sequence[VideoSentenceSelection], background_asset_id: str | None
+    ) -> dict[str, tuple[FrozenVisualAsset, bytes]]:
+        requested = [
+            (item.illustration_asset_id, "illustration")
+            for item in selections
+            if item.illustration_asset_id is not None
+        ]
+        if background_asset_id is not None:
+            requested.append((background_asset_id, "background"))
+        if requested and self.visuals is None:
+            raise VideoJobError("The image library is unavailable. Check its configuration.", 503)
+        frozen: dict[str, tuple[FrozenVisualAsset, bytes]] = {}
+        total = 0
+        try:
+            for asset_id, kind in requested:
+                assert self.visuals is not None and asset_id is not None
+                # Resolve every association's kind, including repeated IDs, before probing tools.
+                asset = self.visuals.get(asset_id, kind=kind)
+                if asset_id in frozen:
+                    continue
+                if total + asset.size_bytes > MAX_VIDEO_VISUAL_BYTES:
+                    raise VideoJobError("Select at most 64 MiB of images for one video.", 422)
+                content = self.visuals.read(asset_id, kind=kind)
+                if (
+                    len(content) != asset.size_bytes
+                    or hashlib.sha256(content).hexdigest() != asset.sha256
+                ):
+                    raise VideoJobError(
+                        "A selected image changed. Select another image or upload it again.", 409
+                    )
+                total += len(content)
+                frozen[asset_id] = (
+                    FrozenVisualAsset(
+                        asset.id, asset.path, asset.size_bytes, asset.sha256, asset.mime_type
+                    ),
+                    content,
+                )
+        except VisualAssetError as exc:
+            raise VideoJobError(exc.detail, exc.status_code) from exc
+        return frozen
+
+    async def submit(
+        self,
+        selections: list[VideoSentenceSelection],
+        background_asset_id: str | None = None,
+    ) -> dict:
+        selections = tuple(selections)
         if self._closed:
             raise VideoJobError("Video service is stopping. Restart before submitting work.", 503)
         if (
@@ -162,6 +216,18 @@ class VideoJobs:
             raise VideoJobError(
                 "Export a shorter video: up to ten minutes and 64 MiB of speech audio.", 422
             )
+        visual_inputs = await asyncio.to_thread(
+            self._freeze_visuals, selections, background_asset_id
+        )
+        visual_bytes = sum(len(content) for _, content in visual_inputs.values())
+        # Another attempt can finish while images are read; enforce capacity again at acceptance.
+        if (
+            len(self._jobs) >= MAX_VIDEO_JOBS
+            or self._reserved_bytes + MAX_VIDEO_JOB_BYTES > MAX_VIDEO_SESSION_BYTES
+        ):
+            raise VideoJobError(
+                "This video session has reached its resource limit. Restart to continue.", 409
+            )
         job_id = uuid.uuid4().hex
         if not self.gate.claim(job_id):
             raise VideoJobError("A local media job is already running. Wait for it to finish.", 409)
@@ -176,7 +242,8 @@ class VideoJobs:
                 font,
                 self.settings.timeout_seconds,
                 output_budget_bytes=MAX_VIDEO_JOB_BYTES
-                - sum(asset.size_bytes for asset in matched),
+                - sum(asset.size_bytes for asset in matched)
+                - visual_bytes,
                 supports_text_shaping=self._tool_preflight.supports_text_shaping,
             )
             workspace = self.speech.assets.workspace
@@ -197,7 +264,17 @@ class VideoJobs:
                 "error": None,
             }
             self._jobs[job_id] = job
-            self._task = asyncio.create_task(self._run(job, matched, directory, renderer))
+            self._task = asyncio.create_task(
+                self._run(
+                    job,
+                    matched,
+                    directory,
+                    renderer,
+                    tuple(item.illustration_asset_id for item in selections),
+                    background_asset_id,
+                    visual_inputs,
+                )
+            )
             return deepcopy(job)
         except (OSError, ValueError) as exc:
             self.gate.release(job_id)
@@ -209,11 +286,27 @@ class VideoJobs:
             raise
 
     async def _run(
-        self, job: dict, matched: tuple[SpeechAsset, ...], directory: Path, renderer: VideoRenderer
+        self,
+        job: dict,
+        matched: tuple[SpeechAsset, ...],
+        directory: Path,
+        renderer: VideoRenderer,
+        illustration_ids: tuple[str | None, ...],
+        background_id: str | None,
+        visual_inputs: dict[str, tuple[FrozenVisualAsset, bytes]],
     ) -> None:
         job["status"] = "running"
         try:
             assert self.speech.assets is not None
+            visuals: dict[str, FrozenVisualAsset] = {}
+            for index, (asset_id, (asset, content)) in enumerate(visual_inputs.items(), 1):
+                extension = EXTENSIONS[asset.mime_type]
+                snapshot = directory / f"visual-{index:04d}.{extension}"
+                with snapshot.open("xb") as handle:
+                    handle.write(content)
+                visuals[asset_id] = FrozenVisualAsset(
+                    asset.id, snapshot, asset.size_bytes, asset.sha256, asset.mime_type
+                )
             frozen = []
             for index, asset in enumerate(matched, 1):
                 content = self.speech.assets.read(asset.id)
@@ -222,7 +315,11 @@ class VideoJobs:
                     handle.write(content)
                 frozen.append(
                     FrozenVideoSentence(
-                        asset.sentence_id, asset.text, snapshot, asset.duration_seconds
+                        asset.sentence_id,
+                        asset.text,
+                        snapshot,
+                        asset.duration_seconds,
+                        visuals.get(illustration_ids[index - 1]),
                     )
                 )
             render_directory = checked_directory(directory / "render", self.speech.assets.workspace)
@@ -235,7 +332,18 @@ class VideoJobs:
                 ):
                     job["completedSentences"] = completed
 
-            result = await renderer.render(tuple(frozen), render_directory, on_progress=progress)
+            # Preserve compatibility with existing no-image renderer adapters.
+            if background_id is None:
+                result = await renderer.render(
+                    tuple(frozen), render_directory, on_progress=progress
+                )
+            else:
+                result = await renderer.render(
+                    tuple(frozen),
+                    render_directory,
+                    background=visuals[background_id],
+                    on_progress=progress,
+                )
             expected = sum(page.duration_seconds for page in video_timeline(frozen))
             asset, stored = await asyncio.to_thread(
                 self._register, job["id"], result, directory, expected
@@ -269,7 +377,43 @@ class VideoJobs:
                 "retry the export.",
             )
         finally:
-            self.gate.release(job["id"])
+            try:
+                if job["status"] != "completed":
+                    # All renderer processes have stopped before this boundary.
+                    # Retain failed inputs/evidence, but charge their actual bytes so
+                    # repeated small failures do not consume four full reservations.
+                    stored = await asyncio.to_thread(self._stored_bytes, directory)
+                    self._reserved_bytes -= MAX_VIDEO_JOB_BYTES - stored
+            except Exception:
+                # An unreadable/unsafe attempt keeps its full reservation; never
+                # assume that unverified files occupy no storage.
+                pass
+            finally:
+                self.gate.release(job["id"])
+
+    def _stored_bytes(self, directory: Path) -> int:
+        assert self.speech.assets is not None
+        checked_directory(directory, self.speech.assets.workspace)
+
+        def fail_scan(error: OSError) -> None:
+            raise error
+
+        stored = 0
+        for parent, directories, files in os.walk(directory, followlinks=False, onerror=fail_scan):
+            checked_directory(Path(parent), self.speech.assets.workspace)
+            for name in directories:
+                checked_directory(Path(parent) / name, self.speech.assets.workspace)
+            for name in files:
+                path = Path(parent) / name
+                info = path.stat(follow_symlinks=False)
+                if not stat.S_ISREG(info.st_mode):
+                    raise VideoJobError("The video job produced an unsafe file.")
+                stored += info.st_size
+                if stored > MAX_VIDEO_JOB_BYTES:
+                    raise VideoJobError(
+                        "The video exceeded its resource limit. Export fewer sentences."
+                    )
+        return stored
 
     def _register(
         self, job_id: str, result: RenderedVideo, directory: Path, expected: float
@@ -284,19 +428,7 @@ class VideoJobs:
             raise VideoJobError("The rendered video did not match the frozen timeline.")
         self._checked_asset_path(result.path, job_id)
         size, digest = file_digest(result.path, MAX_VIDEO_ASSET_BYTES)
-        stored = 0
-        for parent, directories, files in os.walk(directory, followlinks=False):
-            for name in directories:
-                checked_directory(Path(parent) / name, self.speech.assets.workspace)
-            for name in files:
-                path = Path(parent) / name
-                if path.is_symlink() or not path.is_file():
-                    raise VideoJobError("The video job produced an unsafe file.")
-                stored += path.stat().st_size
-                if stored > MAX_VIDEO_JOB_BYTES:
-                    raise VideoJobError(
-                        "The video exceeded its resource limit. Export fewer sentences."
-                    )
+        stored = self._stored_bytes(directory)
         asset = VideoAsset(
             uuid.uuid4().hex, job_id, result.path, size, digest, result.duration_seconds
         )

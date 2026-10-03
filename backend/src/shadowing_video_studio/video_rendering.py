@@ -30,11 +30,21 @@ class VideoRenderingError(Exception):
 
 
 @dataclass(frozen=True)
+class FrozenVisualAsset:
+    id: str
+    path: Path
+    size_bytes: int
+    sha256: str
+    mime_type: str
+
+
+@dataclass(frozen=True)
 class FrozenVideoSentence:
     id: str
     text: str
     audio_path: Path
     duration_seconds: float
+    illustration: FrozenVisualAsset | None = None
 
 
 @dataclass(frozen=True)
@@ -75,6 +85,7 @@ class VideoRenderer(Protocol):
         sentences: Sequence[FrozenVideoSentence],
         job_directory: Path,
         *,
+        background: FrozenVisualAsset | None = None,
         on_progress: VideoProgress | None = None,
     ) -> RenderedVideo: ...
 

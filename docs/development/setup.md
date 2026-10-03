@@ -144,6 +144,10 @@ Normal checks use fake providers and fixtures. They do not require provider cred
 
 ## Generated/runtime data
 
+Optional background and sentence-illustration uploads reuse the media workspace and
+local FFmpeg tools. See [visual library](visual-library.md) for image limits, API and
+[ADR 0003](../architecture/decisions/0003-local-visual-library.md) for durable image storage.
+
 Model caches, generated audio/video, user assets, logs, and local runtime state must remain outside Git-tracked paths covered by `.gitignore`.
 
 The exact local project/history persistence location is still an open architecture decision.

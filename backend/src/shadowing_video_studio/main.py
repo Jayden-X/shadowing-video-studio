@@ -10,12 +10,17 @@ from shadowing_video_studio.speech_api import router as speech_router
 from shadowing_video_studio.text_api import router as text_router
 from shadowing_video_studio.video_api import create_video_service
 from shadowing_video_studio.video_api import router as video_router
+from shadowing_video_studio.visual_api import create_visual_service
+from shadowing_video_studio.visual_api import router as visual_router
 
 
 @asynccontextmanager
 async def lifespan(application: FastAPI):
     application.state.speech = create_speech_service()
-    application.state.video = create_video_service(application.state.speech)
+    application.state.visuals = create_visual_service()
+    application.state.video = create_video_service(
+        application.state.speech, visuals=application.state.visuals.library
+    )
     try:
         yield
     finally:
@@ -31,6 +36,7 @@ app = FastAPI(
 app.include_router(text_router)
 app.include_router(speech_router)
 app.include_router(video_router)
+app.include_router(visual_router)
 configure_frontend(app)
 
 
@@ -38,12 +44,16 @@ configure_frontend(app)
 async def invalid_request(request: Request, _error: RequestValidationError) -> JSONResponse:
     # Pydantic's default validation response echoes submitted values, including private source.
     detail = (
-        "Invalid video request."
-        if request.url.path.startswith("/api/video/")
+        "Invalid visual request."
+        if request.url.path.startswith("/api/visuals/")
         else (
-            "Invalid speech request."
-            if request.url.path.startswith("/api/speech/")
-            else "Invalid text preparation request."
+            "Invalid video request."
+            if request.url.path.startswith("/api/video/")
+            else (
+                "Invalid speech request."
+                if request.url.path.startswith("/api/speech/")
+                else "Invalid text preparation request."
+            )
         )
     )
     return JSONResponse(status_code=422, content={"detail": detail})

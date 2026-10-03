@@ -83,6 +83,21 @@ label { display: block; margin-bottom: 8px; font-size: 13px; font-weight: 600; }
 .source-snapshot pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; font-size: 13px; line-height: 1.7; background: #f4f6f1; padding: 14px; border-radius: 8px; }
 .session-note { margin-top: 22px; color: #7c887f; font-size: 11px; line-height: 1.6; }
 .editor-notice { min-height: 22px; color: #426a54; font-size: 12px; line-height: 1.6; margin: 12px 0; }
+.visual-library { display: grid; gap: 12px; margin: 14px 0 22px; padding: 16px; border: 1px solid #dfe6de; border-radius: 12px; background: #f7f9f5; }
+.visual-library-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+.visual-library-heading h3, .sentence-illustration h4 { color: #426a54; font-size: 14px; }
+.visual-library-heading .field-help { margin-top: 4px; }
+.visual-asset-picker { display: grid; gap: 8px; }
+.visual-asset-picker > label:first-child { margin: 0; }
+.visual-asset-picker select { min-width: 0; }
+.upload-image-label { margin: 2px 0 0; color: #557267; font-size: 12px; }
+.visual-asset-picker input[type="file"] { width: 100%; max-width: 420px; color: #617367; font-size: 12px; }
+.visual-preview { display: grid; gap: 6px; justify-items: start; margin: 4px 0 0; }
+.visual-preview img { display: block; width: min(100%, 280px); max-height: 150px; object-fit: contain; border: 1px solid #d3ddd6; border-radius: 8px; background: #fff; }
+.visual-preview figcaption { color: #718077; font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
+.sentence-illustration { display: grid; gap: 8px; margin: 14px 0; padding: 14px; border: 1px solid #e3e9e1; border-radius: 10px; background: #f5f8f2; }
+.sentence-illustration h4 { margin-bottom: -4px; }
+.sentence-illustration .field-help { margin-top: 0; }
 .split-help { margin-bottom: 16px; }
 .empty-state { padding: 62px 16px; text-align: center; border: 1px dashed #d7e0d8; border-radius: 12px; background: #f9faf7; }
 .empty-state p { margin-top: 10px; color: #78877c; font-size: 13px; line-height: 1.7; }
@@ -123,6 +138,7 @@ label { display: block; margin-bottom: 8px; font-size: 13px; font-weight: 600; }
   .workspace { grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr); gap: 16px; }
   .panel { padding: 20px; }
   .confirmation { align-items: flex-start; flex-direction: column; gap: 16px; }
+  .visual-library-heading { align-items: flex-start; flex-direction: column; }
 }
 @media (max-width: 720px) {
   .app-shell { padding: 28px 16px 40px; }

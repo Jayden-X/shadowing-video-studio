@@ -4,8 +4,10 @@ import type { SentenceItem } from "./domain/sentences";
 import { videoAssetUrl } from "./videoApi";
 import type { useVideo } from "./useVideo";
 
-export function VideoControls({ video, sentences, selection, locked }: {
+export function VideoControls({ video, sentences, selection, locked, backgroundAssetId = null,
+  illustrationsBySentence = {}, visualProblem = null }: {
   video: ReturnType<typeof useVideo>; sentences: readonly SentenceItem[]; selection: SpeechSelection; locked: boolean;
+  backgroundAssetId?: string | null; illustrationsBySentence?: Readonly<Record<string, string>>; visualProblem?: string | null;
 }) {
   const audio = getCompleteSpeechSelection(sentences, selection);
   const [selectedExport, setSelectedExport] = useState<string | null>(null);
@@ -20,11 +22,14 @@ export function VideoControls({ video, sentences, selection, locked }: {
       <div className="panel-heading video-heading">
         <span className="step-number" aria-hidden="true">03</span>
         <div><h2 id="video-title">Shadowing video</h2><p>1080p · One sentence per page · Five-second practice pauses</p></div>
-        <button type="button" className="primary-button" disabled={locked || video.waiting || video.outstanding || video.checking || !video.readiness?.available || audio === null}
-          onClick={() => { if (audio) void video.generate(audio.map(({ id, text, assetId }) => ({ id, text, assetId }))); }}>Generate video</button>
+        <button type="button" className="primary-button" disabled={locked || video.waiting || video.outstanding || video.checking || !video.readiness?.available || audio === null || !!visualProblem}
+          onClick={() => { if (audio) void video.generate(audio.map(({ id, text, assetId }) => ({
+            id, text, assetId, illustrationAssetId: illustrationsBySentence[id] ?? null,
+          })), backgroundAssetId); }}>Generate video</button>
       </div>
       <p className="field-help">Listen to the sentence audio before rendering. Each export freezes the current sentence order and audio; prior MP4 files are preserved.</p>
       {audio === null && <p className="field-help">Generate current audio for every sentence before rendering a video. Edited sentences need new speech.</p>}
+      {visualProblem && <p className="input-error" role="alert">{visualProblem}</p>}
       {video.checking ? <p className="field-help">Checking local video renderer…</p>
         : !video.readiness?.available && <p className="field-help">{video.readiness?.reason ?? "Video availability could not be loaded. Check the local service."}</p>}
       {!video.waiting && <button type="button" disabled={video.checking} onClick={video.refreshReadiness}>Check video availability</button>}

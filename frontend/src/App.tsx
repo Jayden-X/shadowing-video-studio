@@ -4,6 +4,9 @@ import { SentenceSpeech, SpeechControls } from "./SpeechControls";
 import { useSpeech } from "./useSpeech";
 import { VideoControls } from "./VideoControls";
 import { useVideo } from "./useVideo";
+import { useVisuals } from "./useVisuals";
+import { useVisualSelections } from "./useVisualSelections";
+import { BackgroundImageControls, SentenceIllustrationPicker } from "./VisualAssets";
 
 import {
   getBackendHealth,
@@ -36,6 +39,9 @@ const AI_REQUEST_TIMEOUT_MS = 120_000;
 export default function App() {
   const speech = useSpeech();
   const video = useVideo();
+  const visuals = useVisuals();
+  const visualSelectionState = useVisualSelections();
+  const { backgroundAssetId, illustrationsBySentence } = visualSelectionState.selections;
   const [backendState, setBackendState] = useState<BackendState>("checking");
   const [sourceDraft, setSourceDraft] = useState("");
   const [sentenceDocument, setSentenceDocument] = useState(() => createSentenceDocument(""));
@@ -99,6 +105,7 @@ export default function App() {
   function prepareSentences(source: string) {
     const prepared = createSentenceDocument(source);
     setSentenceDocument(prepared);
+    visualSelectionState.clearSentenceIllustrations();
     speech.resetSelection();
     video.resetDocument();
     setHasPrepared(true);
@@ -157,6 +164,7 @@ export default function App() {
   function applyProposal(reviewed: TextProposal) {
     const accepted = createSentenceDocumentFromProposal(reviewed.sourceText, reviewed.sentences);
     setSentenceDocument(accepted);
+    visualSelectionState.clearSentenceIllustrations();
     speech.resetSelection();
     video.resetDocument();
     setHasPrepared(true);
@@ -198,7 +206,35 @@ export default function App() {
     }
 
     setSentenceDocument(updated);
-    setNotice(`Split sentence ${position} into two sentences.`);
+    setNotice(illustrationsBySentence[id]
+      ? `Split sentence ${position}. Its illustration stays with the first part; the new sentence has no illustration.`
+      : `Split sentence ${position} into two sentences. The new sentence has no illustration.`);
+  }
+
+  function mergeSentenceWithPrevious(id: SentenceId, position: number) {
+    const index = sentenceDocument.sentences.findIndex((sentence) => sentence.id === id);
+    if (index <= 0) return;
+    const previous = sentenceDocument.sentences[index - 1];
+    const removedAssetId = illustrationsBySentence[id];
+    const retainedAssetId = illustrationsBySentence[previous.id];
+    if (removedAssetId && removedAssetId !== retainedAssetId) {
+      const removedAsset = visuals.assets.find((asset) => asset.id === removedAssetId);
+      const retainedAsset = visuals.assets.find((asset) => asset.id === retainedAssetId);
+      const removedName = removedAsset?.name ?? "an assigned illustration";
+      const retainedName = retainedAsset?.name ?? "no illustration";
+      if (!window.confirm(`Sentence ${position} uses “${removedName}”, while the sentence above uses “${retainedName}”. Merging removes sentence ${position}'s assignment and keeps the sentence above's illustration. Continue?`)) return;
+    }
+    setSentenceDocument((current) => mergeWithPrevious(current, id));
+    visualSelectionState.removeSentenceIllustration(id);
+    setNotice(removedAssetId && removedAssetId !== retainedAssetId
+      ? `Merged sentence ${position}; the previous sentence's illustration was kept.`
+      : `Merged sentence ${position} with the previous sentence.`);
+  }
+
+  function deleteSentenceWithIllustration(id: SentenceId, position: number) {
+    setSentenceDocument((current) => deleteSentence(current, id));
+    visualSelectionState.removeSentenceIllustration(id);
+    setNotice(`Deleted sentence ${position}. Its illustration assignment was removed; the image remains in the library.`);
   }
 
   const preparingAgain = replacement !== null;
@@ -207,6 +243,12 @@ export default function App() {
   const providerAvailable = providers.some((item) => item.id === selectedProvider && item.available);
   const sourceOverLimit = mode === "ai" && sourceDraft.length > MAX_SOURCE_LENGTH;
   const sentenceCount = sentenceDocument.sentences.length;
+  const visualProblem = visuals.selectionProblem([
+    ...(backgroundAssetId ? [{ id: backgroundAssetId, kind: "background" as const }] : []),
+    ...Object.entries(illustrationsBySentence)
+      .filter(([sentenceId]) => sentenceDocument.sentences.some((sentence) => sentence.id === sentenceId))
+      .map(([, id]) => ({ id, kind: "illustration" as const })),
+  ]);
 
   return (
     <main className="app-shell">
@@ -380,6 +422,10 @@ export default function App() {
 
           <p className="editor-notice" role="status" aria-live="polite">{notice}</p>
 
+          <BackgroundImageControls visuals={visuals} value={backgroundAssetId}
+            onChange={visualSelectionState.setBackgroundAssetId} disabled={editingLocked} />
+          {visualSelectionState.storageWarning && <p className="input-error" role="status">{visualSelectionState.storageWarning}</p>}
+
           <SpeechControls speech={speech} sentences={sentenceDocument.sentences}
             locked={editingLocked || video.outstanding || proposal !== null} />
 
@@ -413,12 +459,16 @@ export default function App() {
                       />
                       <div className="sentence-actions" role="group" aria-label={`Actions for sentence ${position}`}>
                         <button type="button" disabled={editingLocked} aria-label={`Split sentence ${position} at cursor`} onClick={() => splitAtCursor(sentence.id, position)}>Split at cursor</button>
-                        <button type="button" disabled={index === 0 || editingLocked} aria-label={`Merge sentence ${position} with previous`} onClick={() => applyOperation((current) => mergeWithPrevious(current, sentence.id), `Merged sentence ${position} with the previous sentence.`)}>Merge above</button>
+                        <button type="button" disabled={index === 0 || editingLocked} aria-label={`Merge sentence ${position} with previous`} onClick={() => mergeSentenceWithPrevious(sentence.id, position)}>Merge above</button>
                         <button type="button" disabled={editingLocked} aria-label={`Add after sentence ${position}`} onClick={() => applyOperation((current) => insertSentenceAfter(current, sentence.id), `Added a sentence after sentence ${position}.`)}>Add below</button>
                         <button type="button" disabled={index === 0 || editingLocked} aria-label={`Move sentence ${position} up`} onClick={() => applyOperation((current) => moveSentence(current, sentence.id, "up"), `Moved sentence ${position} up.`)}>Move up</button>
                         <button type="button" disabled={index === sentenceCount - 1 || editingLocked} aria-label={`Move sentence ${position} down`} onClick={() => applyOperation((current) => moveSentence(current, sentence.id, "down"), `Moved sentence ${position} down.`)}>Move down</button>
-                        <button type="button" className="delete-button" disabled={editingLocked} aria-label={`Delete sentence ${position}`} onClick={() => applyOperation((current) => deleteSentence(current, sentence.id), `Deleted sentence ${position}.`)}>Delete</button>
+                        <button type="button" className="delete-button" disabled={editingLocked} aria-label={`Delete sentence ${position}`} onClick={() => deleteSentenceWithIllustration(sentence.id, position)}>Delete</button>
                       </div>
+                      <SentenceIllustrationPicker visuals={visuals} sentenceId={sentence.id} position={position}
+                        value={illustrationsBySentence[sentence.id] ?? null}
+                        onChange={(assetId) => visualSelectionState.setSentenceIllustration(sentence.id, assetId)}
+                        disabled={editingLocked} />
                       <SentenceSpeech sentence={sentence} position={position} selection={speech.selection} job={speech.job}
                         disabled={editingLocked || speech.outstanding || video.outstanding || proposal !== null || !speech.readiness?.available}
                         regenerate={() => { void speech.generate([sentence], true); }} />
@@ -431,7 +481,8 @@ export default function App() {
         </section>
       </div>
       <VideoControls video={video} sentences={sentenceDocument.sentences} selection={speech.selection}
-        locked={editingLocked || speech.outstanding || proposal !== null} />
+        locked={editingLocked || speech.outstanding || proposal !== null} backgroundAssetId={backgroundAssetId}
+        illustrationsBySentence={illustrationsBySentence} visualProblem={visualProblem} />
     </main>
   );
 }

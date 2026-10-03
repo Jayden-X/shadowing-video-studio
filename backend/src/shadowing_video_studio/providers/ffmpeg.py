@@ -1,9 +1,11 @@
 """FFmpeg fixed-template adapter. User text/path values never enter a filter expression."""
 
 import asyncio
+import hashlib
 import json
 import math
 import os
+import re
 import struct
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -16,6 +18,7 @@ from shadowing_video_studio.video_rendering import (
     MAX_VIDEO_ASSET_BYTES,
     MAX_VIDEO_JOB_BYTES,
     FrozenVideoSentence,
+    FrozenVisualAsset,
     RenderedVideo,
     TextLayout,
     VideoPage,
@@ -32,6 +35,9 @@ MAX_AUDIO_BYTES = 64 * 1024 * 1024
 OUTPUT_MARGIN_BYTES = 4 * 1024 * 1024
 PAGE_HEADER_BYTES = 256 * 1024
 PCM_BYTES_PER_SECOND = 48000 * 2
+MAX_VISUAL_BYTES = 10 * 1024 * 1024
+VISUAL_CODECS = {"png": "png", "jpg": "mjpeg", "webp": "webp"}
+VISUAL_EXTENSIONS = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp"}
 
 
 def budget_error() -> VideoRenderingError:
@@ -163,20 +169,75 @@ def page_arguments(
     index: int,
     file_size_limit: int = MAX_VIDEO_JOB_BYTES - MAX_VIDEO_ASSET_BYTES - OUTPUT_MARGIN_BYTES,
     supports_text_shaping: bool = True,
+    background_filename: str | None = None,
+    illustration_filename: str | None = None,
 ) -> list[str]:
     duration = f"{page.duration_seconds:.9f}"
     stem = f"page-{index:04d}"
     # FFmpeg exposes this option only in builds with libfribidi. Without it,
     # shaping is absent already; adding the unsupported option would fail rendering.
     shaping_option = ":text_shaping=0" if supports_text_shaping else ""
-    graph = (
+    audio_graph = (
         f"[0:a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=mono,"
         f"apad=pad_dur=5,apad=whole_dur={duration},atrim=duration={duration},"
         "asetpts=PTS-STARTPTS,asplit=2[voice][waveinput];"
-        f"color=c=0x101b2d:s=1920x1080:r=30:d={duration}[background];"
+    )
+    image_arguments: list[str] = []
+    # Decode a single raster, then repeat the scaled frame a finite number of times.
+    # Looping image2 sources can keep feeding the audio/video scheduler after output ends.
+    for filename in (background_filename, illustration_filename):
+        if filename is None:
+            continue
+        if not re.fullmatch(r"visual-[0-9]{4}\.(png|jpg|webp)", filename):
+            raise VideoRenderingError("Use validated local image assets.", "invalid_visual")
+        image_arguments.extend(
+            [
+                "-protocol_whitelist",
+                "file",
+                "-f",
+                "image2",
+                "-pattern_type",
+                "none",
+                "-framerate",
+                str(FRAME_RATE),
+                "-threads",
+                "1",
+                "-c:v",
+                VISUAL_CODECS[filename.rsplit(".", 1)[1]],
+                "-i",
+                filename,
+            ]
+        )
+    background_graph = (
+        "[1:v]scale=w=1920:h=1080:force_original_aspect_ratio=increase:out_range=tv,"
+        "crop=w=1920:h=1080,setsar=1,format=yuv420p,"
+        "drawbox=x=0:y=0:w=iw:h=ih:color=black@0.60:t=fill,"
+        f"loop=loop={page.frame_count - 1}:size=1:start=0,setpts=N/(30*TB)[background];"
+        if background_filename is not None
+        else f"color=c=0x101b2d:s=1920x1080:r=30:d={duration}[background];"
+    )
+    panel_graph = (
         "[background]drawbox=x=1240:y=92:w=584:h=736:color=0x20334c:t=fill,"
-        "drawbox=x=96:y=852:w=1728:h=184:color=0x182a40:t=fill,"
-        f"drawtext=fontfile=font.ttf:textfile={stem}.txt:expansion=none:"
+        "drawbox=x=96:y=852:w=1728:h=184:color=0x182a40:t=fill"
+    )
+    if illustration_filename is not None:
+        illustration_index = 2 if background_filename is not None else 1
+        panel_graph += (
+            "[panel];"
+            f"[{illustration_index}:v]scale=w=584:h=736:force_original_aspect_ratio=decrease,"
+            "setsar=1,format=rgba,"
+            f"loop=loop={page.frame_count - 1}:size=1:start=0,setpts=N/(30*TB)[illustration];"
+            "[panel][illustration]overlay=x=1240+(584-overlay_w)/2:"
+            "y=92+(736-overlay_h)/2:eof_action=repeat:shortest=0[illustrated];"
+            "[illustrated]"
+        )
+    else:
+        panel_graph += ","
+    graph = (
+        audio_graph
+        + background_graph
+        + panel_graph
+        + f"drawtext=fontfile=font.ttf:textfile={stem}.txt:expansion=none:"
         f"fontsize={layout.font_size}:fontcolor=white:x=96:y=96:"
         f"line_spacing=16{shaping_option}[base];"
         "[waveinput]showwaves=s=1728x144:mode=line:rate=30:colors=0x4fbcff:"
@@ -197,6 +258,7 @@ def page_arguments(
         "wav",
         "-i",
         f"audio-{index:04d}.wav",
+        *image_arguments,
         "-filter_complex_threads",
         "1",
         "-filter_complex",
@@ -338,6 +400,30 @@ def _copy_new(source: Path, destination: Path, expected_bytes: int) -> None:
             )
 
 
+def _visual_content(asset: FrozenVisualAsset) -> bytes:
+    if (
+        not re.fullmatch(r"[0-9a-f]{32}", asset.id)
+        or asset.mime_type not in VISUAL_EXTENSIONS
+        or isinstance(asset.size_bytes, bool)
+        or not 0 < asset.size_bytes <= MAX_VISUAL_BYTES
+        or not re.fullmatch(r"[0-9a-f]{64}", asset.sha256)
+    ):
+        raise VideoRenderingError("Use validated local image assets.", "invalid_visual")
+    source = _regular_path(asset.path)
+    with source.open("rb") as handle:
+        content = handle.read(MAX_VISUAL_BYTES + 1)
+    if len(content) != asset.size_bytes or hashlib.sha256(content).hexdigest() != asset.sha256:
+        raise VideoRenderingError(
+            "A selected image changed. Select another image or upload it again.", "invalid_visual"
+        )
+    return content
+
+
+def _write_new(content: bytes, path: Path) -> None:
+    with path.open("xb") as handle:
+        handle.write(content)
+
+
 def directory_bytes(directory: Path) -> int:
     total = 0
     for parent, directories, files in os.walk(directory, followlinks=False):
@@ -436,11 +522,12 @@ class FfmpegVideoRenderer:
         sentences: Sequence[FrozenVideoSentence],
         job_directory: Path,
         *,
+        background: FrozenVisualAsset | None = None,
         on_progress: VideoProgress | None = None,
     ) -> RenderedVideo:
         try:
             async with asyncio.timeout(self.timeout):
-                return await self._render(tuple(sentences), job_directory, on_progress)
+                return await self._render(tuple(sentences), job_directory, on_progress, background)
         except TimeoutError as exc:
             raise VideoRenderingError(
                 "Video rendering timed out. Retry with fewer sentences.", "timeout"
@@ -456,6 +543,7 @@ class FfmpegVideoRenderer:
         sentences: tuple[FrozenVideoSentence, ...],
         job_directory: Path,
         on_progress: VideoProgress | None,
+        background: FrozenVisualAsset | None,
     ) -> RenderedVideo:
         pages = video_timeline(sentences)
         directory = _regular_path(job_directory, directory=True)
@@ -483,12 +571,30 @@ class FfmpegVideoRenderer:
                 raise VideoRenderingError("Use valid ready WAV speech assets.", "invalid_audio")
         font_bytes = font.stat().st_size
         source_bytes = [source.stat().st_size for source in sources]
+        visuals: dict[str, tuple[FrozenVisualAsset, bytes, str]] = {}
+        for asset in (background, *(page.sentence.illustration for page in pages)):
+            if asset is None:
+                continue
+            if asset.id in visuals:
+                if visuals[asset.id][0] != asset:
+                    raise VideoRenderingError(
+                        "Selected image identities do not match. Select the images again.",
+                        "invalid_visual",
+                    )
+                continue
+            content = await asyncio.to_thread(_visual_content, asset)
+            if sum(len(value[1]) for value in visuals.values()) + len(content) > 64 * 1024 * 1024:
+                raise budget_error()
+            extension = VISUAL_EXTENSIONS[asset.mime_type]
+            filename = f"visual-{len(visuals) + 1:04d}.{extension}"
+            visuals[asset.id] = (asset, content, filename)
         manifest = "".join(f"file 'page-{index:04d}.mkv'\n" for index in range(1, len(pages) + 1))
         baseline = (
             font_bytes
             + sum(source_bytes)
             + sum(len(layout.text.encode("utf-8")) for layout in layouts)
             + len(manifest.encode("utf-8"))
+            + sum(len(value[1]) for value in visuals.values())
         )
         minimum_pages = sum(
             math.ceil(page.duration_seconds * PCM_BYTES_PER_SECOND) + PAGE_HEADER_BYTES
@@ -500,6 +606,8 @@ class FfmpegVideoRenderer:
         ):
             raise budget_error()
         await asyncio.to_thread(_copy_new, font, directory / "font.ttf", font_bytes)
+        for _, content, filename in visuals.values():
+            await asyncio.to_thread(_write_new, content, directory / filename)
         for index, (page, source, layout) in enumerate(
             zip(pages, sources, layouts, strict=True), 1
         ):
@@ -552,6 +660,10 @@ class FfmpegVideoRenderer:
                     index,
                     page_limit,
                     supports_text_shaping=self.supports_text_shaping,
+                    background_filename=visuals[background.id][2] if background else None,
+                    illustration_filename=visuals[page.sentence.illustration.id][2]
+                    if page.sentence.illustration
+                    else None,
                 ),
                 directory,
             )

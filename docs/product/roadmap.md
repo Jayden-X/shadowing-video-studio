@@ -40,7 +40,22 @@
 - Project/history persistence.
 - Versioned outputs.
 
-## Later, not MVP
+## Prioritized follow-up work after first-video acceptance
+
+Priority labels below are independent of phase numbers. Implementation is deferred until
+the corresponding task is ready and any required design decisions are confirmed.
+
+| Priority | Follow-up | Task |
+| --- | --- | --- |
+| P2 | UI upload, local folder library and selection of video backgrounds / sentence illustrations | [009](../../tasks/in-progress/009-local-visual-library.md) |
+| P2 | UI list and selection of voices supported by the local TTS runtime | [010](../../tasks/backlog/010-tts-voice-selection.md) |
+| P3 | Frontend-cached association keys and validated local audio reuse across restart | [008](../../tasks/backlog/008-restart-audio-reuse.md) |
+
+AI illustration generation is a future producer seam within Task 009's design; it is not
+included in that task's initial implementation. Product behavior is defined in
+[prioritized requirements](../requirements/product-requirements.md#prioritized-follow-up-requirements).
+
+## Longer-term scope
 
 - Batch jobs.
 - Multi-user/accounts.

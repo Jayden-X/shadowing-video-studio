@@ -135,6 +135,57 @@ Preferred behavior:
 
 Exact local project/history storage design is still to be decided.
 
+## Prioritized follow-up requirements
+
+The owner assigned the following priorities after accepting the first real Mac video.
+These are backlog requirements; the current fixed-template workflow remains the delivered
+baseline. Priority labels describe delivery order, independently of roadmap phase numbers.
+
+### P2 — Local visual library
+
+- Upload video background images and sentence illustrations through the UI.
+- Store imported images in application-owned local folders and list saved resources for
+  reuse. Users can select an existing background/illustration or upload a new one.
+- Select a background for the video and associate a right-side illustration with each
+  sentence/audio segment. Bind illustrations to stable sentence identities rather than
+  list positions; rendering freezes those associations with the sentence/audio timeline.
+- Preserve uploaded resources when browser/service sessions end. A missing or invalid file
+  must produce a recoverable selection error, without deleting other resources or source text.
+- Reserve a future AI illustration producer behind the same resource import/registration
+  boundary. The first implementation covers user-uploaded images and does not implement an
+  AI image provider, credentials, automatic generation, or model selection.
+
+See [Task 009](../../tasks/in-progress/009-local-visual-library.md) for acceptance and design decisions.
+
+### P2 — TTS voice selection
+
+- Provide a UI list of voices actually supported by the configured local TTS model/runtime,
+  with Aiden as the current default.
+- Make the selected voice explicit in generation requests and progress/result bindings.
+  Changing voice makes existing mismatched audio ineligible for the current selection;
+  keep earlier WAV files intact and require explicit generation for the selected voice.
+- Freeze the voice with the sentence text, language, model revision and effective generation
+  configuration. Include it in safe audio-reuse checks; never silently substitute a voice.
+
+See [Task 010](../../tasks/backlog/010-tts-voice-selection.md). The local visual folder/list
+interaction can inform this selector's UI; supported voices are provider capabilities.
+
+### P3 — Audio reuse across browser/service restarts
+
+- Cache stable audio association keys in the frontend so reopening the same work can request
+  reuse when both the cached association and the corresponding local file remain available.
+- The backend must resolve the association through trusted stored metadata and revalidate
+  exact sentence content, voice/language/model/configuration, file ownership, integrity and
+  audio format before registering a usable asset in the new service session.
+- Existing transient asset IDs and browser cache alone are insufficient proof of validity.
+  Lost/stale associations, missing/corrupt files or configuration changes fall back to explicit
+  regeneration with a clear reason, preserving original text and existing media.
+- This is best-effort reuse and does not guarantee recovery after browser-cache clearing or
+  file removal. Frontend cache and backend metadata formats require a design decision before
+  implementation; large WAV files remain local files outside Git.
+
+See [Task 008](../../tasks/backlog/008-restart-audio-reuse.md).
+
 ## Open decisions
 
 - Concrete application stack and packaging strategy.

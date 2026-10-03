@@ -82,7 +82,11 @@ FFmpeg may be used internally, but higher layers should not build command string
 
 Persist enough state to avoid losing successfully generated sentence audio/results.
 
-The exact storage format is not selected yet.
+The full project/audio/history format is not selected yet. The visual resource library
+uses immutable image files and version-1 JSON sidecars under the existing media workspace,
+as defined in [ADR 0003](decisions/0003-local-visual-library.md). Image IDs cross the API;
+filesystem paths remain inside the adapter. Future image producers use the same validated
+registration boundary. This does not make speech/export lookup metadata durable.
 
 Keep persistent project metadata separate from large generated media where practical.
 

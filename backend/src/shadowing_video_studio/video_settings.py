@@ -29,6 +29,11 @@ REQUIRED_FILTERS = frozenset(
         "drawbox",
         "fps",
         "format",
+        "scale",
+        "crop",
+        "setsar",
+        "loop",
+        "setpts",
     }
 )
 REQUIRED_ENCODERS = frozenset({"libx264", "pcm_s16le", "aac"})

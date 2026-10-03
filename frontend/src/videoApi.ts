@@ -1,6 +1,6 @@
 import { speechInputProblem } from "./domain/speech";
 
-export type VideoSentence = { id: string; text: string; assetId: string };
+export type VideoSentence = { id: string; text: string; assetId: string; illustrationAssetId?: string | null };
 export type VideoStatus = { available: boolean; reason: string | null };
 export type VideoJob = {
   id: string;
@@ -72,12 +72,29 @@ function validateJob(value: unknown, total: number, expectedId?: string): VideoJ
   return { id: value.id, status: value.status, completedSentences: value.completedSentences, totalSentences: total,
     assetId: value.assetId, durationSeconds: value.durationSeconds, error: value.error === null ? null : FAILED };
 }
-export async function createVideoJob(sentences: readonly VideoSentence[], signal?: AbortSignal): Promise<VideoJob> {
+export async function createVideoJob(
+  sentences: readonly VideoSentence[],
+  backgroundAssetId?: string | null,
+  signal?: AbortSignal,
+): Promise<VideoJob> {
   const problem = speechInputProblem(sentences);
-  if (problem || sentences.some((sentence) => !opaqueId.test(sentence.assetId))) throw new VideoApiError(problem ?? "Every sentence needs current generated audio before rendering video.");
+  if (problem) throw new VideoApiError(problem);
+  if (sentences.some((sentence) => !opaqueId.test(sentence.assetId))) {
+    throw new VideoApiError("Every sentence needs current generated audio before rendering video.");
+  }
+  if (sentences.some((sentence) => sentence.illustrationAssetId != null && !opaqueId.test(sentence.illustrationAssetId))
+    || (backgroundAssetId != null && !opaqueId.test(backgroundAssetId))) {
+    throw new VideoApiError("Every selected image must have a valid local asset.");
+  }
   return validateJob(await requestJson("/api/video/jobs", {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ sentences: sentences.map(({ id, text, assetId }) => ({ id, text, assetId })) }), signal,
+    body: JSON.stringify({
+      sentences: sentences.map(({ id, text, assetId, illustrationAssetId }) => ({
+        id, text, assetId,
+        ...(illustrationAssetId == null ? {} : { illustrationAssetId }),
+      })),
+      ...(backgroundAssetId == null ? {} : { backgroundAssetId }),
+    }), signal,
   }), sentences.length);
 }
 export async function getVideoJob(id: string, total: number, signal?: AbortSignal): Promise<VideoJob> {

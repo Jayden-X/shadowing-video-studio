@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 import os
 import struct
@@ -17,6 +18,7 @@ from shadowing_video_studio.providers.process import ProcessResult
 from shadowing_video_studio.text_processing import PreparationError
 from shadowing_video_studio.video_rendering import (
     FrozenVideoSentence,
+    FrozenVisualAsset,
     TextLayout,
     VideoRenderingError,
     video_timeline,
@@ -221,6 +223,64 @@ def test_render_preserves_originals_uses_fresh_directory_and_reports_progress(tm
     with pytest.raises(VideoRenderingError) as error:
         asyncio.run(renderer.render([sentence], job))
     assert error.value.code == "output_exists" and result.path.exists()
+
+
+def test_selected_images_are_frozen_checked_and_use_contain_cover_graph(tmp_path):
+    runner = FakeRunner(output_seconds=12)
+    renderer, sentence, job = setup_renderer(tmp_path, runner)
+    background_path = tmp_path / "private background [name].png"
+    illustration_path = tmp_path / "private illustration [name].webp"
+    background_path.write_bytes(b"synthetic already-decoded PNG fixture")
+    illustration_path.write_bytes(b"synthetic already-decoded WebP fixture")
+
+    def frozen_image(identifier, path, mime):
+        content = path.read_bytes()
+        return FrozenVisualAsset(
+            identifier * 32, path, len(content), hashlib.sha256(content).hexdigest(), mime
+        )
+
+    background = frozen_image("a", background_path, "image/png")
+    illustration = frozen_image("b", illustration_path, "image/webp")
+    illustrated = FrozenVideoSentence(
+        sentence.id, sentence.text, sentence.audio_path, 1, illustration
+    )
+    second = FrozenVideoSentence("two", "A second sentence.", sentence.audio_path, 1, illustration)
+    result = asyncio.run(renderer.render([illustrated, second], job, background=background))
+    assert result.duration_seconds == 12
+    assert (job / "visual-0001.png").read_bytes() == background_path.read_bytes()
+    assert (job / "visual-0002.webp").read_bytes() == illustration_path.read_bytes()
+    assert len(list(job.glob("visual-*"))) == 2  # Repeated selections are copied once.
+    pages = [arguments for arguments, _ in runner.calls if arguments[-1].endswith(".mkv")]
+    for arguments in pages:
+        graph = arguments[arguments.index("-filter_complex") + 1]
+        inputs = [arguments[index + 1] for index, value in enumerate(arguments) if value == "-i"]
+        assert inputs[1:] == ["visual-0001.png", "visual-0002.webp"]
+        assert "private" not in graph and "private" not in " ".join(arguments)
+        assert "force_original_aspect_ratio=increase" in graph and "crop=w=1920:h=1080" in graph
+        assert "color=black@0.60" in graph and "force_original_aspect_ratio=decrease" in graph
+        assert "x=1240+(584-overlay_w)/2" in graph and "apad=pad_dur=5" in graph
+        assert "out_range=tv" in graph and "loop=loop=179:size=1:start=0" in graph
+        assert "setpts=N/(30*TB)" in graph and "eof_action=repeat:shortest=0" in graph
+        assert "-loop" not in arguments
+        for index, value in enumerate(arguments):
+            if value == "-i" and arguments[index + 1].startswith("visual-"):
+                assert arguments[index - 4 : index - 2] == ["-threads", "1"]
+
+    illustration_path.write_bytes(b"changed image")
+    fresh = tmp_path / "changed-image-output"
+    fresh.mkdir()
+    runner.calls.clear()
+    with pytest.raises(VideoRenderingError) as error:
+        asyncio.run(renderer.render([illustrated], fresh, background=background))
+    assert error.value.code == "invalid_visual" and not runner.calls and not list(fresh.iterdir())
+    large = tmp_path / "large-background.png"
+    large.write_bytes(b"x" * (2 * 1024 * 1024))
+    renderer.output_budget_bytes = 134 * 1024 * 1024
+    with pytest.raises(VideoRenderingError) as error:
+        asyncio.run(
+            renderer.render([sentence], fresh, background=frozen_image("c", large, "image/png"))
+        )
+    assert error.value.code == "storage_budget" and not runner.calls and not list(fresh.iterdir())
 
 
 @pytest.mark.parametrize(

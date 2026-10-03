@@ -11,7 +11,10 @@ afterEach(() => {
 
 beforeEach(() => {
   vi.stubGlobal("fetch", vi.fn(async (url: string) => jsonResponse(
-    url === "/api/text/providers" ? { providers: availableProviders } : { status: "ok" },
+    url === "/api/text/providers" ? { providers: availableProviders }
+      : url === "/api/visuals/status" ? visualStatus
+      : url === "/api/visuals/assets" ? { assets: [] }
+      : { status: "ok" },
   )));
 });
 
@@ -19,6 +22,7 @@ const availableProviders = [
   { id: "deepseek", label: "DeepSeek", available: true, reason: null },
   { id: "codex", label: "Codex CLI", available: true, reason: null },
 ];
+const visualStatus = { available: true, reason: null, maxUploadBytes: 10 * 1024 * 1024, formats: ["image/png", "image/jpeg", "image/webp"] };
 
 function jsonResponse(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
@@ -28,6 +32,8 @@ function mockPreparation(result: (init: RequestInit | undefined) => Response | P
   const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
     if (url === "/api/text/providers") return jsonResponse({ providers: availableProviders });
     if (url === "/api/text/prepare") return result(init);
+    if (url === "/api/visuals/status") return jsonResponse(visualStatus);
+    if (url === "/api/visuals/assets") return jsonResponse({ assets: [] });
     return jsonResponse({ status: "ok" });
   });
   vi.stubGlobal("fetch", fetchMock);
@@ -341,6 +347,8 @@ describe("AI-assisted preparation", () => {
   it("explains unavailable providers safely and leaves manual preparation usable", async () => {
     vi.stubGlobal("fetch", vi.fn(async (url: string) => jsonResponse(url === "/api/text/providers"
       ? { providers: availableProviders.map((provider) => ({ ...provider, available: false, reason: "secret token" })) }
+      : url === "/api/visuals/status" ? visualStatus
+      : url === "/api/visuals/assets" ? { assets: [] }
       : { status: "ok" })));
     const user = userEvent.setup();
     render(<App />);
