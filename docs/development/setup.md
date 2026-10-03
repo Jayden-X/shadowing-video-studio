@@ -109,7 +109,7 @@ uv sync --extra dev --extra tts
 
 Do not download or commit model weights into this repository.
 
-The actual acceleration/backend behavior on the target Mac must be validated before the end-user packaging strategy is finalized. That validation belongs in a dedicated TTS integration/spike task.
+The actual acceleration/backend behavior on the target Mac must be validated before the end-user packaging strategy is finalized. Use the separate [Task 004 Mac runtime spike](qwen3-tts-macos-spike.md) for an isolated, reproducible experiment rather than changing the normal backend/CI environment.
 
 ## Environment configuration
 
