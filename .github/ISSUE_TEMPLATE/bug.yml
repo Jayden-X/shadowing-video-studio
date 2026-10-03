@@ -1,0 +1,33 @@
+name: Bug
+description: Reproducible defect
+title: "[Bug] "
+labels: []
+body:
+  - type: textarea
+    id: observed
+    attributes:
+      label: Observed behavior
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction steps
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: Logs, screenshots, sample input, or other safe evidence.
+  - type: textarea
+    id: validation
+    attributes:
+      label: Validation
+      description: How should the fix be verified?

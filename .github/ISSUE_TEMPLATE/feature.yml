@@ -1,0 +1,29 @@
+name: Feature
+description: Product or engineering feature proposal
+title: "[Feature] "
+labels: []
+body:
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+      description: What user outcome should change?
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Concrete observable conditions for completion.
+    validations:
+      required: true
+  - type: textarea
+    id: out_of_scope
+    attributes:
+      label: Out of scope
+      description: What should explicitly not be included?
+  - type: textarea
+    id: validation
+    attributes:
+      label: Validation
+      description: How should a human or AI agent prove this works?

@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  repository-hygiene:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check required repository guidance
+        run: |
+          test -f README.md
+          test -f AGENTS.md
+          test -f docs/requirements/product-requirements.md
+          test -f docs/architecture/overview.md
+          test -f docs/development/ai-development.md
+
+      - name: Reject obvious committed local secrets
+        shell: bash
+        run: |
+          if git ls-files | grep -E '(^|/).env($|.)' | grep -v -E '(^|/).env.example$'; then
+            echo "Local .env files must not be committed."
+            exit 1
+          fi
+
+      - name: Reject generated media
+        shell: bash
+        run: |
+          if git ls-files | grep -Ei '.(mp4|mov|mkv|webm|wav|mp3|m4a|aac|flac)$'; then
+            echo "Generated media must not be committed."
+            exit 1
+          fi
+
+      - name: Note
+        run: echo "Language-specific lint/test/build jobs will be added after task 001 selects the application stack."
