@@ -1,5 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 
+import { SentenceSpeech, SpeechControls } from "./SpeechControls";
+import { useSpeech } from "./useSpeech";
+
 import {
   getBackendHealth,
   getTextProviders,
@@ -29,6 +32,7 @@ type Replacement = { kind: "manual"; source: string } | { kind: "ai"; proposal: 
 const AI_REQUEST_TIMEOUT_MS = 120_000;
 
 export default function App() {
+  const speech = useSpeech();
   const [backendState, setBackendState] = useState<BackendState>("checking");
   const [sourceDraft, setSourceDraft] = useState("");
   const [sentenceDocument, setSentenceDocument] = useState(() => createSentenceDocument(""));
@@ -92,6 +96,7 @@ export default function App() {
   function prepareSentences(source: string) {
     const prepared = createSentenceDocument(source);
     setSentenceDocument(prepared);
+    speech.resetSelection();
     setHasPrepared(true);
     setReplacement(null);
     setNotice(`Prepared ${prepared.sentences.length} sentences. Your source snapshot is saved below.`);
@@ -148,6 +153,7 @@ export default function App() {
   function applyProposal(reviewed: TextProposal) {
     const accepted = createSentenceDocumentFromProposal(reviewed.sourceText, reviewed.sentences);
     setSentenceDocument(accepted);
+    speech.resetSelection();
     setHasPrepared(true);
     setProposal(null);
     setReplacement(null);
@@ -191,7 +197,7 @@ export default function App() {
   }
 
   const preparingAgain = replacement !== null;
-  const editingLocked = preparingAgain || aiPending;
+  const editingLocked = preparingAgain || aiPending || speech.waiting;
   const sourceLocked = editingLocked || proposal !== null;
   const providerAvailable = providers.some((item) => item.id === selectedProvider && item.available);
   const sourceOverLimit = mode === "ai" && sourceDraft.length > MAX_SOURCE_LENGTH;
@@ -369,6 +375,9 @@ export default function App() {
 
           <p className="editor-notice" role="status" aria-live="polite">{notice}</p>
 
+          <SpeechControls speech={speech} sentences={sentenceDocument.sentences}
+            locked={editingLocked || proposal !== null} />
+
           {sentenceCount === 0 ? (
             <div className="empty-state">
               <h3>Your sentence list starts here</h3>
@@ -405,6 +414,9 @@ export default function App() {
                         <button type="button" disabled={index === sentenceCount - 1 || editingLocked} aria-label={`Move sentence ${position} down`} onClick={() => applyOperation((current) => moveSentence(current, sentence.id, "down"), `Moved sentence ${position} down.`)}>Move down</button>
                         <button type="button" className="delete-button" disabled={editingLocked} aria-label={`Delete sentence ${position}`} onClick={() => applyOperation((current) => deleteSentence(current, sentence.id), `Deleted sentence ${position}.`)}>Delete</button>
                       </div>
+                      <SentenceSpeech sentence={sentence} position={position} selection={speech.selection} job={speech.job}
+                        disabled={editingLocked || speech.outstanding || proposal !== null || !speech.readiness?.available}
+                        regenerate={() => { void speech.generate([sentence], true); }} />
                     </li>
                   );
                 })}

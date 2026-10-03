@@ -8,7 +8,7 @@ The project turns an English dialogue into a repeatable shadowing-video workflow
 
 ## Current status
 
-The local application shell, manual sentence editor, and AI sentence proposals are available. The MVP is intentionally small, while the architecture leaves explicit extension seams for later capabilities.
+The local application shell, manual sentence editor, AI sentence proposals, and local sentence speech workflow are available. The MVP is intentionally small, while the architecture leaves explicit extension seams for later capabilities.
 
 ### Confirmed MVP boundaries
 
@@ -36,7 +36,13 @@ Text preparation has two modes:
 
 **DeepSeek** and the **Codex CLI** sit behind a replaceable provider abstraction. See [provider setup](docs/development/setup.md#environment-configuration). Credentials remain in the backend/local CLI, and AI preparation is limited to 20,000 source characters.
 
-The manual editor works without the backend, AI, TTS, or FFmpeg. Splitting uses simple punctuation/newline rules; abbreviations and decimals may need manual correction. Work is held in the current browser session and is lost on refresh or closing the tab. Speech and video generation are not implemented yet.
+The manual editor works without the backend, AI, TTS, or FFmpeg. Splitting uses simple punctuation/newline rules; abbreviations and decimals may need manual correction. Work is held in the current browser session and is lost on refresh or closing the tab. Video generation is not implemented yet.
+
+### Sentence speech
+
+With the local Qwen runtime configured, explicitly choose **Generate speech** after reviewing the sentence list. The application uses the validated CPU/0.6B CustomVoice path with English/Aiden, shows per-sentence progress, and provides native audio previews and single-sentence regeneration. Unchanged successful audio is reused; editing text makes its prior audio ineligible. Replacing a document clears its current audio selections.
+
+Generation locks editing while the UI waits. **Stop waiting for speech** ends monitoring without cancelling the local generation job; a known job can be monitored again. Jobs are serialized by the service. Speech accepts up to 100 sentences, 4,000 characters each, and 20,000 total characters. Metadata is volatile: after a service restart, generate again. Generated WAV files are kept locally and are never overwritten by regeneration. See [runtime setup](docs/development/setup.md).
 
 ## Technology stack
 

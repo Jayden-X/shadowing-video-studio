@@ -6,6 +6,20 @@ Vibe coding does not reduce verification requirements.
 
 An agent must prove behavior rather than rely on code plausibility.
 
+## MVP test scope
+
+The owner selected a focused test approach for the current MVP:
+
+- Keep existing tests and CI checks.
+- Add tests for core workflow transitions, important domain rules, failure recovery,
+  and data/filesystem/process safety where a regression would matter.
+- Prefer a small representative set of scenarios over a separate test for every helper,
+  UI string, style, setter, or implementation detail.
+- Defer low-impact edge cases and cosmetic assertions. Record a material unverified risk
+  explicitly rather than expanding the suite to cover every possible variation.
+- Use actual model/media integration evidence for the main path when available; it
+  complements the focused deterministic checks and must not be reported as unit-test proof.
+
 ## Test selection
 
 Use the cheapest reliable test for the risk:
