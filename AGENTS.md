@@ -1,97 +1,95 @@
 # AGENTS.md
 
-This file defines repository-wide instructions for Codex and other coding agents.
+Repository-wide operating instructions for Codex and every other coding agent.
 
 ## Mission
 
-Build **Shadowing Video Studio**, a local-first English shadowing video generator. Optimize for a small, reliable MVP while keeping clean extension seams for later capabilities.
+Build **Shadowing Video Studio**, a reliable local-first English shadowing video generator.
 
-## Read before coding
+Favor a small MVP, explicit domain boundaries, reproducible validation, and repository-based shared context.
 
-Before changing implementation code, read:
+## Instruction authority
+
+Follow the precedence defined in [Engineering & Agent Standards](docs/standards/README.md).
+
+Never silently resolve a conflict by changing product scope or architecture.
+
+## Required reading before implementation
 
 1. `README.md`
-2. `docs/requirements/product-requirements.md`
-3. `docs/architecture/overview.md`
-4. `docs/development/ai-development.md`
+2. `docs/standards/README.md`
+3. Relevant files under `docs/requirements/`
+4. Relevant architecture docs and ADRs
 5. The selected task under `tasks/ready/`
+6. Nearby implementation and tests
 
-If a task conflicts with product requirements or architecture boundaries, stop and surface the conflict instead of silently redefining scope.
+For non-trivial changes, also read the specific standards relevant to the work.
 
-## Product constraints
+## Core product constraints
 
-MVP:
-- One primary user on the current Mac.
-- One video at a time.
-- Paste-in text input first.
-- No accounts, multi-user collaboration, cloud runtime, or batch jobs in MVP.
-- These are MVP scope constraints, not permanent architecture constraints.
+Current MVP:
 
-Text processing:
-- Manual mode.
-- AI-assisted mode.
-- AI providers should be replaceable; initial targets are DeepSeek and Codex.
-- AI output must remain reviewable/editable before media generation.
+- local-first on the current Mac
+- one primary user
+- one video at a time
+- paste-in dialogue first
+- manual and AI-assisted sentence preparation
+- DeepSeek/Codex as initial AI-provider targets
+- Qwen3-TTS with Aiden as the current default voice
+- FFmpeg-based MP4 generation
+- no accounts, cloud runtime, multi-user collaboration, or batch jobs in MVP
 
-Media defaults:
-- 16:9, 1920x1080.
-- One sentence per page.
-- 5-second default shadowing pause.
-- Left-side large English subtitle, right-side visual area, bottom waveform.
-- Qwen3-TTS with Aiden as default voice.
-- MP4 output.
+These are product-scope constraints, not permanent architecture constraints.
 
-## AI operating rules
+The full source of truth is `docs/requirements/product-requirements.md`.
 
-### You may decide without asking
-- Local implementation details consistent with existing architecture.
-- Small refactors needed to complete the task.
-- Test structure.
-- Naming consistent with existing conventions.
-- Fixes for lint/build/test failures introduced by your change.
-- Small documentation updates required by the change.
+## Agent operating rules
 
-### Escalate for human decision
-Do not make these choices implicitly:
-- Product-scope changes.
-- Architecture changes that remove an extension seam.
-- Introducing a major framework or significant dependency not already approved.
-- Changing persistent data/file formats incompatibly.
-- Changing credential/secret strategy.
-- Deleting user data or generated assets.
-- Expanding MVP into cloud, multi-user, batch, or account features.
+Follow:
 
-## Task discipline
+- `docs/standards/agent-operating-model.md`
+- `docs/standards/code-standards.md`
+- `docs/standards/architecture-guardrails.md`
+- `docs/standards/testing-standards.md`
+- `docs/standards/git-workflow.md`
+- `docs/standards/task-standard.md`
+- `docs/standards/review-standard.md`
+- `docs/standards/documentation-standard.md`
+- `docs/standards/security-standard.md`
 
-Only implement work that has a task file in `tasks/ready/`, unless the human explicitly gives a direct task.
+## Delivery rule
 
-For task-based work:
-1. Move/copy the task conceptually from ready to in-progress in your working branch/process.
-2. Implement only the stated goal and necessary supporting changes.
-3. Run every validation step in the task.
-4. Record implementation notes and any deviations.
-5. Do not mark acceptance criteria complete unless verified.
-6. Move the task to review/done only when the workflow being used supports that safely.
+Default delivery unit:
+
+**one task → one branch → one PR → one squash commit on `main`**
+
+Tools may create temporary intermediate commits on a work branch, but commit-per-file noise must not enter `main`.
+
+## Human decision gates
+
+Stop and request a decision before making:
+
+- user-visible product-scope changes
+- major framework/runtime dependency choices
+- incompatible persistence changes
+- security/credential-policy changes
+- cloud/account/multi-user expansion
+- destructive user-data behavior
+- major architecture boundary changes
 
 ## Definition of done
 
-A task is done only when:
-- Acceptance criteria are satisfied.
-- Relevant automated tests pass.
-- Build/lint checks pass where available.
-- No secrets or generated media are committed.
-- Documentation is updated when behavior or architecture changed.
-- Known limitations are written down instead of hidden.
+Do not claim completion until:
 
-## Repository hygiene
+- acceptance criteria are satisfied
+- relevant tests/checks actually ran and passed
+- blocker/required review findings are resolved
+- no secrets/generated media/model weights are committed
+- affected documentation/task notes are synchronized
+- limitations and unverified items are stated explicitly
 
-Never commit:
-- `.env` or credentials.
-- API keys/tokens.
-- Model weights/caches.
-- Generated audio/video.
-- User source media.
-- Runtime databases/state.
-- Logs/temp/cache directories.
+## Standards are living documentation
 
-Prefer small commits and focused diffs.
+When a recurring engineering or agent-coordination problem is discovered, fix the immediate issue and update the smallest relevant file under `docs/standards/`.
+
+Do not rely on chat history as permanent project policy.
