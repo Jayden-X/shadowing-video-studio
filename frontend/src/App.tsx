@@ -1,34 +1,60 @@
 import { useEffect, useRef, useState } from "react";
 
-import { getBackendHealth } from "./api";
+import {
+  getBackendHealth,
+  getTextProviders,
+  prepareText,
+  TextApiError,
+  type TextProposal,
+  type TextProvider,
+  type TextProviderId,
+} from "./api";
 import {
   createSentenceDocument,
+  createSentenceDocumentFromProposal,
   deleteSentence,
   insertSentenceAfter,
   mergeWithPrevious,
   moveSentence,
   splitSentence,
   updateSentenceText,
+  MAX_SOURCE_LENGTH,
   type SentenceDocument,
   type SentenceId,
 } from "./domain/sentences";
 
 type BackendState = "checking" | "online" | "offline";
+type PreparationMode = "manual" | "ai";
+type Replacement = { kind: "manual"; source: string } | { kind: "ai"; proposal: TextProposal };
+const AI_REQUEST_TIMEOUT_MS = 120_000;
 
 export default function App() {
   const [backendState, setBackendState] = useState<BackendState>("checking");
   const [sourceDraft, setSourceDraft] = useState("");
   const [sentenceDocument, setSentenceDocument] = useState(() => createSentenceDocument(""));
   const [hasPrepared, setHasPrepared] = useState(false);
-  const [pendingSource, setPendingSource] = useState<string | null>(null);
+  const [replacement, setReplacement] = useState<Replacement | null>(null);
   const [notice, setNotice] = useState("");
+  const [mode, setMode] = useState<PreparationMode>("manual");
+  const [providers, setProviders] = useState<TextProvider[]>([]);
+  const [providerStatus, setProviderStatus] = useState<BackendState>("checking");
+  const [selectedProvider, setSelectedProvider] = useState<TextProviderId | "">("");
+  const [proposal, setProposal] = useState<TextProposal | null>(null);
+  const [aiPending, setAiPending] = useState(false);
+  const [aiError, setAiError] = useState("");
   const sentenceInputs = useRef(new Map<SentenceId, HTMLTextAreaElement>());
   const prepareButton = useRef<HTMLButtonElement>(null);
+  const applyButton = useRef<HTMLButtonElement>(null);
   const cancelButton = useRef<HTMLButtonElement>(null);
   const wasConfirming = useRef(false);
+  const confirmationOrigin = useRef<PreparationMode>("manual");
+  const activeRequest = useRef<AbortController | null>(null);
+  const requestSequence = useRef(0);
+  const requestTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     let active = true;
+    const controller = new AbortController();
     getBackendHealth()
       .then(() => {
         if (active) setBackendState("online");
@@ -36,31 +62,106 @@ export default function App() {
       .catch(() => {
         if (active) setBackendState("offline");
       });
+    getTextProviders(controller.signal)
+      .then((availableProviders) => {
+        if (!active) return;
+        setProviders(availableProviders);
+        setProviderStatus("online");
+      })
+      .catch(() => {
+        if (active) setProviderStatus("offline");
+      });
     return () => {
       active = false;
+      controller.abort();
+      requestSequence.current += 1;
+      activeRequest.current?.abort();
+      if (requestTimer.current !== null) clearTimeout(requestTimer.current);
     };
   }, []);
 
   useEffect(() => {
-    if (pendingSource !== null) cancelButton.current?.focus();
-    else if (wasConfirming.current) prepareButton.current?.focus();
-    wasConfirming.current = pendingSource !== null;
-  }, [pendingSource]);
+    if (replacement !== null) cancelButton.current?.focus();
+    else if (wasConfirming.current) {
+      if (confirmationOrigin.current === "ai" && applyButton.current) applyButton.current.focus();
+      else prepareButton.current?.focus();
+    }
+    wasConfirming.current = replacement !== null;
+  }, [replacement]);
 
   function prepareSentences(source: string) {
     const prepared = createSentenceDocument(source);
     setSentenceDocument(prepared);
     setHasPrepared(true);
-    setPendingSource(null);
+    setReplacement(null);
     setNotice(`Prepared ${prepared.sentences.length} sentences. Your source snapshot is saved below.`);
   }
 
   function requestPreparation() {
     if (hasPrepared || sentenceDocument.sentences.length > 0) {
-      setPendingSource(sourceDraft);
+      confirmationOrigin.current = "manual";
+      setReplacement({ kind: "manual", source: sourceDraft });
       return;
     }
     prepareSentences(sourceDraft);
+  }
+
+  function stopWaiting(timedOut = false) {
+    requestSequence.current += 1;
+    activeRequest.current?.abort();
+    activeRequest.current = null;
+    if (requestTimer.current !== null) clearTimeout(requestTimer.current);
+    requestTimer.current = null;
+    setAiPending(false);
+    if (timedOut) setAiError("AI preparation timed out. Your source and current edits are preserved.");
+    else setNotice("Stopped waiting for the AI result. The provider may still be running; your current work is preserved.");
+  }
+
+  async function requestAiPreparation() {
+    const provider = providers.find((item) => item.id === selectedProvider && item.available);
+    if (!provider || aiPending || proposal || !sourceDraft.trim() || sourceDraft.length > MAX_SOURCE_LENGTH) return;
+    const controller = new AbortController();
+    const sequence = ++requestSequence.current;
+    activeRequest.current = controller;
+    setAiError("");
+    setNotice("");
+    setAiPending(true);
+    requestTimer.current = setTimeout(() => stopWaiting(true), AI_REQUEST_TIMEOUT_MS);
+    try {
+      const result = await prepareText(provider.id, sourceDraft, controller.signal);
+      if (sequence !== requestSequence.current || controller.signal.aborted) return;
+      setProposal(result);
+      setNotice("AI proposal ready for review. Your current sentence list has not changed.");
+    } catch (error: unknown) {
+      if (sequence !== requestSequence.current || controller.signal.aborted) return;
+      setAiError(error instanceof TextApiError ? error.message : "AI preparation failed. Your source and current edits are preserved.");
+    } finally {
+      if (sequence === requestSequence.current) {
+        if (requestTimer.current !== null) clearTimeout(requestTimer.current);
+        requestTimer.current = null;
+        activeRequest.current = null;
+        setAiPending(false);
+      }
+    }
+  }
+
+  function applyProposal(reviewed: TextProposal) {
+    const accepted = createSentenceDocumentFromProposal(reviewed.sourceText, reviewed.sentences);
+    setSentenceDocument(accepted);
+    setHasPrepared(true);
+    setProposal(null);
+    setReplacement(null);
+    setNotice(`Applied ${accepted.sentences.length} reviewed sentences. Use the manual tools to make corrections.`);
+  }
+
+  function requestProposalApplication() {
+    if (!proposal) return;
+    if (hasPrepared || sentenceDocument.sentences.length > 0) {
+      confirmationOrigin.current = "ai";
+      setReplacement({ kind: "ai", proposal });
+      return;
+    }
+    applyProposal(proposal);
   }
 
   function applyOperation(operation: (current: SentenceDocument) => SentenceDocument, message: string) {
@@ -89,7 +190,11 @@ export default function App() {
     setNotice(`Split sentence ${position} into two sentences.`);
   }
 
-  const preparingAgain = pendingSource !== null;
+  const preparingAgain = replacement !== null;
+  const editingLocked = preparingAgain || aiPending;
+  const sourceLocked = editingLocked || proposal !== null;
+  const providerAvailable = providers.some((item) => item.id === selectedProvider && item.available);
+  const sourceOverLimit = mode === "ai" && sourceDraft.length > MAX_SOURCE_LENGTH;
   const sentenceCount = sentenceDocument.sentences.length;
 
   return (
@@ -108,36 +213,38 @@ export default function App() {
         </p>
       </header>
 
-      {preparingAgain && (
+      {replacement !== null && (
         <section
           className="confirmation"
           role="alertdialog"
           aria-labelledby="replace-title"
           aria-describedby="replace-description"
           onKeyDown={(event) => {
-            if (event.key === "Escape") setPendingSource(null);
+            if (event.key === "Escape") setReplacement(null);
           }}
         >
           <div>
             <h2 id="replace-title">Replace the current sentence list?</h2>
             <p id="replace-description">
-              Preparing again replaces all current sentence edits and the original source snapshot
-              with your source dialogue draft. Cancel to keep your current work and draft.
+              {replacement.kind === "manual"
+                ? "Preparing again replaces all current sentence edits and the original source snapshot with your source dialogue draft. Cancel to keep your current work and draft."
+                : "Applying this reviewed AI proposal replaces all current sentence edits and the original source snapshot with the proposal's source. Cancel to keep your current work and the proposal."}
             </p>
           </div>
           <div className="confirmation-actions">
             <button
               ref={cancelButton}
               type="button"
-              onClick={() => setPendingSource(null)}
+              onClick={() => setReplacement(null)}
             >Cancel</button>
             <button
               type="button"
               className="primary-button"
               onClick={() => {
-                prepareSentences(pendingSource);
+                if (replacement.kind === "manual") prepareSentences(replacement.source);
+                else applyProposal(replacement.proposal);
               }}
-            >Replace and prepare</button>
+            >{replacement.kind === "manual" ? "Replace and prepare" : "Replace and apply"}</button>
           </div>
         </section>
       )}
@@ -148,27 +255,75 @@ export default function App() {
             <span className="step-number" aria-hidden="true">01</span>
             <div><h2 id="source-title">Source dialogue</h2><p>Start with the original English text.</p></div>
           </div>
+          <fieldset className="preparation-mode" disabled={sourceLocked}>
+            <legend>Preparation mode</legend>
+            <label>
+              <input type="radio" name="preparation-mode" value="manual" checked={mode === "manual"}
+                onChange={() => { setMode("manual"); setAiError(""); }} />
+              Manual
+            </label>
+            <label>
+              <input type="radio" name="preparation-mode" value="ai" checked={mode === "ai"}
+                onChange={() => { setMode("ai"); setAiError(""); }} />
+              AI-assisted
+            </label>
+          </fieldset>
+          {mode === "ai" && (
+            <div className="provider-field">
+              <label htmlFor="ai-provider">AI provider</label>
+              <select id="ai-provider" value={selectedProvider} disabled={sourceLocked || providerStatus !== "online"}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  if (value === "" || value === "deepseek" || value === "codex") setSelectedProvider(value);
+                  setAiError("");
+                }}>
+                <option value="">Choose a provider</option>
+                {providers.map((provider) => (
+                  <option key={provider.id} value={provider.id} disabled={!provider.available}>
+                    {provider.label}{!provider.available ? " · Unavailable" : ""}
+                  </option>
+                ))}
+              </select>
+              {providerStatus === "checking" && <p className="field-help">Checking provider availability…</p>}
+              {providerStatus === "offline" && <p className="field-help">Provider availability could not be loaded. Check the local service; manual editing still works.</p>}
+              {providers.filter((provider) => !provider.available).map((provider) => (
+                <p key={provider.id} className="field-help">{provider.reason}</p>
+              ))}
+              <p className="field-help">Prepare sends this dialogue to the selected provider. Review its proposal before applying it. No audio or video is generated.</p>
+            </div>
+          )}
           <label htmlFor="source-dialogue">Source dialogue</label>
           <textarea
             id="source-dialogue"
             className="source-input"
             rows={11}
             value={sourceDraft}
-            disabled={preparingAgain}
+            disabled={sourceLocked}
             placeholder={"Hello there. How are you?\nI’m doing well, thank you."}
             aria-describedby="source-help"
             onChange={(event) => setSourceDraft(event.target.value)}
           />
           <p className="field-help" id="source-help">
-            Sentences are prepared locally from punctuation and line breaks. Review and adjust the result.
+            {mode === "manual"
+              ? "Sentences are prepared locally from punctuation and line breaks. Review and adjust the result."
+              : "Your source is preserved exactly. AI preparation accepts up to 20,000 characters."}
           </p>
+          {sourceOverLimit && <p className="input-error" role="alert">This dialogue has {sourceDraft.length.toLocaleString("en-US")} characters. Shorten it to 20,000 or fewer for AI preparation; the full draft is preserved.</p>}
           <button
             ref={prepareButton}
             type="button"
             className="primary-button prepare-button"
-            disabled={!sourceDraft.trim() || preparingAgain}
-            onClick={requestPreparation}
-          >Prepare sentences</button>
+            disabled={!sourceDraft.trim() || sourceLocked || sourceOverLimit || (mode === "ai" && !providerAvailable)}
+            onClick={mode === "manual" ? requestPreparation : requestAiPreparation}
+          >{mode === "manual" ? "Prepare sentences" : aiPending ? "Preparing AI proposal…" : "Prepare AI proposal"}</button>
+          {aiPending && (
+            <div className="pending-preparation" role="status">
+              <p className="field-help">Preparing a proposal. Your source and current edits are protected while waiting.</p>
+              <button type="button" onClick={() => stopWaiting()}>Stop waiting</button>
+            </div>
+          )}
+          {aiError && <p className="input-error" role="alert">{aiError}</p>}
+          {proposal && <p className="field-help">Apply or discard the proposal before changing the source or preparing again.</p>}
 
           {hasPrepared && (
             <details className="source-snapshot">
@@ -189,10 +344,28 @@ export default function App() {
             </div>
             <button
               type="button"
-              disabled={preparingAgain}
+              disabled={editingLocked}
               onClick={() => applyOperation((current) => insertSentenceAfter(current, null), "Added a sentence at the end.")}
             >Add sentence</button>
           </div>
+
+          {proposal && (
+            <section className="proposal-review" aria-labelledby="proposal-title">
+              <h3 id="proposal-title">Review AI proposal</h3>
+              <p className="field-help">{proposal.provider === "deepseek" ? "DeepSeek" : "Codex CLI"} proposed {proposal.sentences.length} sentences. Check the wording and order. This proposal has not been applied and generates no media.</p>
+              <ol className="proposal-list" aria-label="Proposed sentences">
+                {proposal.sentences.map((text, index) => <li key={index}>{text}</li>)}
+              </ol>
+              <div className="proposal-actions">
+                <button ref={applyButton} type="button" className="primary-button" disabled={preparingAgain}
+                  onClick={requestProposalApplication}>Apply reviewed sentences</button>
+                <button type="button" disabled={preparingAgain} onClick={() => {
+                  setProposal(null);
+                  setNotice("Discarded the AI proposal. Your source and current sentence edits are preserved.");
+                }}>Discard proposal</button>
+              </div>
+            </section>
+          )}
 
           <p className="editor-notice" role="status" aria-live="polite">{notice}</p>
 
@@ -216,7 +389,7 @@ export default function App() {
                         id={`input-${sentence.id}`}
                         rows={3}
                         value={sentence.text}
-                        disabled={preparingAgain}
+                        disabled={editingLocked}
                         aria-describedby="split-help"
                         ref={(input) => {
                           if (input) sentenceInputs.current.set(sentence.id, input);
@@ -225,12 +398,12 @@ export default function App() {
                         onChange={(event) => setSentenceDocument((current) => updateSentenceText(current, sentence.id, event.target.value))}
                       />
                       <div className="sentence-actions" role="group" aria-label={`Actions for sentence ${position}`}>
-                        <button type="button" disabled={preparingAgain} aria-label={`Split sentence ${position} at cursor`} onClick={() => splitAtCursor(sentence.id, position)}>Split at cursor</button>
-                        <button type="button" disabled={index === 0 || preparingAgain} aria-label={`Merge sentence ${position} with previous`} onClick={() => applyOperation((current) => mergeWithPrevious(current, sentence.id), `Merged sentence ${position} with the previous sentence.`)}>Merge above</button>
-                        <button type="button" disabled={preparingAgain} aria-label={`Add after sentence ${position}`} onClick={() => applyOperation((current) => insertSentenceAfter(current, sentence.id), `Added a sentence after sentence ${position}.`)}>Add below</button>
-                        <button type="button" disabled={index === 0 || preparingAgain} aria-label={`Move sentence ${position} up`} onClick={() => applyOperation((current) => moveSentence(current, sentence.id, "up"), `Moved sentence ${position} up.`)}>Move up</button>
-                        <button type="button" disabled={index === sentenceCount - 1 || preparingAgain} aria-label={`Move sentence ${position} down`} onClick={() => applyOperation((current) => moveSentence(current, sentence.id, "down"), `Moved sentence ${position} down.`)}>Move down</button>
-                        <button type="button" className="delete-button" disabled={preparingAgain} aria-label={`Delete sentence ${position}`} onClick={() => applyOperation((current) => deleteSentence(current, sentence.id), `Deleted sentence ${position}.`)}>Delete</button>
+                        <button type="button" disabled={editingLocked} aria-label={`Split sentence ${position} at cursor`} onClick={() => splitAtCursor(sentence.id, position)}>Split at cursor</button>
+                        <button type="button" disabled={index === 0 || editingLocked} aria-label={`Merge sentence ${position} with previous`} onClick={() => applyOperation((current) => mergeWithPrevious(current, sentence.id), `Merged sentence ${position} with the previous sentence.`)}>Merge above</button>
+                        <button type="button" disabled={editingLocked} aria-label={`Add after sentence ${position}`} onClick={() => applyOperation((current) => insertSentenceAfter(current, sentence.id), `Added a sentence after sentence ${position}.`)}>Add below</button>
+                        <button type="button" disabled={index === 0 || editingLocked} aria-label={`Move sentence ${position} up`} onClick={() => applyOperation((current) => moveSentence(current, sentence.id, "up"), `Moved sentence ${position} up.`)}>Move up</button>
+                        <button type="button" disabled={index === sentenceCount - 1 || editingLocked} aria-label={`Move sentence ${position} down`} onClick={() => applyOperation((current) => moveSentence(current, sentence.id, "down"), `Moved sentence ${position} down.`)}>Move down</button>
+                        <button type="button" className="delete-button" disabled={editingLocked} aria-label={`Delete sentence ${position}`} onClick={() => applyOperation((current) => deleteSentence(current, sentence.id), `Deleted sentence ${position}.`)}>Delete</button>
                       </div>
                     </li>
                   );

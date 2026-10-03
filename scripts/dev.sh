@@ -16,7 +16,12 @@ trap cleanup EXIT INT TERM
 
 (
   cd "$ROOT_DIR/backend"
-  uv run uvicorn shadowing_video_studio.main:app     --app-dir src     --reload     --host 127.0.0.1     --port 8765
+  backend_env_args=()
+  if [[ -f "$ROOT_DIR/.env" ]]; then
+    backend_env_args=(--env-file "$ROOT_DIR/.env")
+  fi
+  uv run "${backend_env_args[@]}" uvicorn shadowing_video_studio.main:app \
+    --app-dir src --reload --host 127.0.0.1 --port 8765
 ) &
 backend_pid=$!
 

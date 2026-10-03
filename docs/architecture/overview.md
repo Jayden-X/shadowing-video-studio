@@ -46,6 +46,10 @@ Implementations may include:
 
 The canonical sentence list belongs to the application/domain model, not to any provider response format.
 
+The text-preparation application service validates a provider-neutral sentence proposal before returning it through the local API. Provider responses carry text only; canonical sentence IDs are assigned in the frontend domain when a user applies the reviewed proposal. The exact source snapshot and the current edited document remain separate from a pending proposal.
+
+DeepSeek uses its official HTTPS API with a backend-only environment key. Codex uses the existing local CLI login from an isolated temporary working directory with configuration/tool isolation checks. Failure and unavailable configuration return safe application errors and never trigger automatic retries or media generation.
+
 ### 3. TTS
 
 Abstraction:
