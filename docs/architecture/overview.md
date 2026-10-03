@@ -61,6 +61,12 @@ Initial target:
 
 Voice selection such as Aiden should be configuration/domain data, not scattered constants.
 
+Task010 exposes `SpeechCapabilities` through the local API. Document-level voice selection
+binds immutable speech requests/results and audio reuse; video export validates the same
+voice/configuration binding. The Qwen adapter discovers voices from the configured frozen
+snapshot, with an independent loaded-model check inside the existing worker. Selection
+does not start inference or change the accepted process/persistence boundaries.
+
 Qwen3-TTS is treated as an optional heavy runtime dependency and is intentionally excluded from normal CI.
 
 ### 4. Video rendering

@@ -6,6 +6,7 @@ const jobId = "a".repeat(32);
 const speechAsset = "b".repeat(32);
 const firstExport = "c".repeat(32);
 const nextExport = "d".repeat(32);
+const binding = { voice: "Aiden", configurationFingerprint: "f".repeat(64) };
 type Snapshot = { id: string; text: string; assetId: string }[];
 function videoJob(total: number, status: "completed" | "running" | "failed" = "completed", assetId = firstExport) {
   return { id: jobId, status, completedSentences: status === "completed" ? total : 0, totalSentences: total,
@@ -18,11 +19,13 @@ function mockVideo(create: (snapshot: Snapshot, init: RequestInit | undefined) =
   const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
     if (url === "/api/video/status") return json({ available: true, reason: null });
     if (url === "/api/speech/status") return json({ available: true, reason: null, voice: "Aiden", model: "Qwen3-TTS-12Hz-0.6B-CustomVoice", backend: "cpu" });
+    if (url === "/api/speech/capabilities") return json({ available: true, reason: null, defaultVoice: "Aiden", model: "Qwen3-TTS-12Hz-0.6B-CustomVoice", language: "English",
+      voices: [{ id: "Aiden", label: "Aiden", configurationFingerprint: binding.configurationFingerprint }] });
     if (url === "/api/text/providers") return json({ providers: ["codex", "deepseek"].map((id) => ({ id, label: id, available: false, reason: "unavailable" })) });
     if (url === "/api/speech/jobs") {
       const { sentences } = JSON.parse(init?.body as string) as { sentences: { id: string; text: string }[] };
-      return json({ id: "e".repeat(32), status: "completed", error: null,
-        sentences: sentences.map((sentence) => ({ ...sentence, status: "ready", assetId: speechAsset, durationSeconds: 1.5, error: null, reused: false })) }, 202);
+      return json({ id: "e".repeat(32), status: "completed", error: null, ...binding,
+        sentences: sentences.map((sentence) => ({ ...sentence, ...binding, status: "ready", assetId: speechAsset, durationSeconds: 1.5, error: null, reused: false })) }, 202);
     }
     if (url === "/api/video/jobs") {
       const { sentences } = JSON.parse(init?.body as string) as { sentences: Snapshot };
@@ -63,7 +66,7 @@ describe("video export workflow", () => {
     const posts = fetchMock.mock.calls.filter(([url]) => url === "/api/video/jobs");
     expect(JSON.parse(posts[0][1]?.body as string)).toEqual({ sentences: [
       { id: "sentence-001", text: "Hello.", assetId: speechAsset }, { id: "sentence-002", text: "Next.", assetId: speechAsset },
-    ] });
+    ], ...binding });
     await act(async () => { fireEvent.click(button("Generate video")); });
     expect(within(screen.getByRole("list", { name: "Exports in this session" })).getAllByRole("listitem")).toHaveLength(2);
     expect(screen.getByRole("link", { name: "Download export 1" }).getAttribute("href")).toContain(firstExport);
@@ -107,12 +110,14 @@ describe("video export workflow", () => {
     await generateSpeech();
     await act(async () => { fireEvent.click(button("Generate video")); fireEvent.click(button("Generate video")); });
     expect(fetchMock.mock.calls.filter(([url]) => url === "/api/video/jobs")).toHaveLength(1);
+    expect((screen.getByRole("combobox", { name: "Speech voice" }) as HTMLSelectElement).disabled).toBe(true);
     expect(sentence(1).disabled).toBe(true);
     expect(button("Generate speech").disabled).toBe(true);
     expect(button("Prepare sentences").disabled).toBe(true);
     await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
     fireEvent.click(button("Stop waiting for video"));
     expect(signal?.aborted).toBe(true);
+    expect((screen.getByRole("combobox", { name: "Speech voice" }) as HTMLSelectElement).disabled).toBe(true);
     expect(sentence(1).disabled).toBe(false);
     expect(button("Generate speech").disabled).toBe(true);
     expect(screen.getByText(/does not cancel rendering/)).toBeTruthy();

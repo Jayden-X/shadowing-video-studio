@@ -40,7 +40,7 @@ The manual editor works without the backend, AI, TTS, or FFmpeg. Splitting uses 
 
 ### Sentence speech
 
-With the local Qwen runtime configured, explicitly choose **Generate speech** after reviewing the sentence list. The application uses the validated CPU/0.6B CustomVoice path with English/Aiden, shows per-sentence progress, and provides native audio previews and single-sentence regeneration. Unchanged successful audio is reused; editing text makes its prior audio ineligible. Replacing a document clears its current audio selections.
+With the local Qwen runtime configured, select a document voice and explicitly choose **Generate speech** after reviewing the sentence list. The application uses the validated CPU/0.6B CustomVoice path with English and Aiden as the default when supported. Available voices come from the configured local model; selecting one does not run inference. Jobs freeze the selected voice and configuration, show per-sentence progress, and provide native audio previews and single-sentence regeneration. Unchanged successful audio with the same voice/configuration is reused; editing text or switching voices makes mismatched audio ineligible. Earlier WAVs are preserved. Replacing a document clears its current audio selections.
 
 Generation locks editing while the UI waits. **Stop waiting for speech** ends monitoring without cancelling the local generation job; a known job can be monitored again. Jobs are serialized by the service. Speech accepts up to 100 sentences, 4,000 characters each, and 20,000 total characters. Metadata is volatile: after a service restart, generate again. Generated WAV files are kept locally and are never overwritten by regeneration. See [runtime setup](docs/development/setup.md).
 

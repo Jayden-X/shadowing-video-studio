@@ -3,13 +3,20 @@
 import asyncio
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
 
 from shadowing_video_studio.providers.process import SubprocessRunner
 from shadowing_video_studio.providers.windows_job import WindowsJob
-from shadowing_video_studio.speech import SpeechError, SpeechReadiness
+from shadowing_video_studio.speech import (
+    VOICE,
+    SpeechCapabilities,
+    SpeechError,
+    SpeechReadiness,
+    SpeechVoice,
+)
 from shadowing_video_studio.speech_assets import SpeechAssets
 from shadowing_video_studio.speech_settings import SpeechSettings
 
@@ -59,6 +66,53 @@ class QwenSpeechProvider:
     @property
     def fingerprint(self) -> str:
         return self._settings.fingerprint()
+
+    def fingerprint_for_voice(self, voice: str) -> str:
+        return self._settings.fingerprint(voice)
+
+    async def capabilities(self) -> SpeechCapabilities:
+        readiness = await self.readiness()
+        if not readiness.available:
+            return SpeechCapabilities(False, readiness.reason)
+        try:
+            _, model = self._settings.validated_paths()
+            config_path = model / "config.json"
+            if config_path.stat().st_size > 1024 * 1024:
+                raise ValueError
+            config = json.loads(config_path.read_bytes())
+            speakers = config["talker_config"]["spk_id"]
+            if (
+                not isinstance(speakers, dict)
+                or not 1 <= len(speakers) <= 100
+                or any(
+                    not isinstance(name, str)
+                    or not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", name)
+                    or type(identifier) is not int
+                    or identifier < 0
+                    for name, identifier in speakers.items()
+                )
+            ):
+                raise ValueError
+            # Qwen derives get_supported_speakers from this local config map.
+            # Reading metadata does not import the ML runtime or load weights.
+            voices = tuple(
+                SpeechVoice(
+                    name.title(),
+                    name.replace("_", " ").title(),
+                    self.fingerprint_for_voice(name.title()),
+                )
+                for name in sorted(speakers)
+            )
+            return SpeechCapabilities(
+                True,
+                voices=voices,
+                default_voice=VOICE if any(item.id == VOICE for item in voices) else None,
+            )
+        except (SpeechError, OSError, ValueError, KeyError, TypeError, RecursionError):
+            return SpeechCapabilities(
+                False,
+                "The configured model has no valid selectable voice list. Check its snapshot.",
+            )
 
     def _executable(self) -> str:
         path = shutil.which(self._settings.python_executable)
@@ -134,14 +188,17 @@ class QwenSpeechProvider:
             await self._stop()
             raise
 
-    async def generate(self, text: str, destination: Path) -> None:
+    async def generate(self, text: str, destination: Path, voice: str = VOICE) -> None:
         async with self._lock:
             try:
                 async with asyncio.timeout(self._settings.timeout_seconds):
                     process = await self._start()
                     assert process.stdin and process.stdout
                     request = (
-                        json.dumps({"text": text, "destination": str(destination)}).encode() + b"\n"
+                        json.dumps(
+                            {"text": text, "destination": str(destination), "voice": voice}
+                        ).encode()
+                        + b"\n"
                     )
                     if len(request) > 65536:
                         raise SpeechError(
@@ -153,6 +210,12 @@ class QwenSpeechProvider:
                     if len(raw) > 4096 or not raw.endswith(b"\n"):
                         raise ValueError
                     result = json.loads(raw)
+                    if result == {"ok": False, "error": "voice"}:
+                        raise SpeechError(
+                            "This voice is unavailable in the loaded model. "
+                            "Refresh voices and select again.",
+                            422,
+                        )
                     if result == {"ok": False, "error": "incomplete"}:
                         raise SpeechError(
                             "Speech did not finish normally. Split this sentence and try again."

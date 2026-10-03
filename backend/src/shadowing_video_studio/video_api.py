@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field, StrictStr
 
-from shadowing_video_studio.speech import MAX_SPEECH_SENTENCES, SpeechError
+from shadowing_video_studio.speech import MAX_SPEECH_SENTENCES, VOICE, SpeechError
 from shadowing_video_studio.speech_api import get_speech_service, verify_local_request
 from shadowing_video_studio.speech_jobs import SpeechJobs
 from shadowing_video_studio.video_jobs import VideoJobError, VideoJobs, VideoSentenceSelection
@@ -28,6 +28,8 @@ class VideoJobRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     sentences: list[VideoSentenceRequest] = Field(min_length=1, max_length=MAX_SPEECH_SENTENCES)
     backgroundAssetId: StrictStr | None = Field(default=None, pattern=r"^[0-9a-f]{32}$")
+    voice: StrictStr = Field(default=VOICE, min_length=1, max_length=64)
+    configurationFingerprint: StrictStr | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
 
 def create_video_service(speech: SpeechJobs, visuals: VisualLibrary | None = None) -> VideoJobs:
@@ -59,6 +61,8 @@ async def submit(
                 for item in payload.sentences
             ],
             background_asset_id=payload.backgroundAssetId,
+            voice=payload.voice,
+            configuration_fingerprint=payload.configurationFingerprint,
         )
     except (VideoJobError, SpeechError) as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc

@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictStr
 from shadowing_video_studio.providers.qwen import QwenSpeechProvider
 from shadowing_video_studio.speech import (
     MAX_SPEECH_SENTENCES,
+    VOICE,
     HeavyJobGate,
     SpeechError,
     SpeechSentence,
@@ -56,6 +57,8 @@ class SpeechJobRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     sentences: list[SentenceRequest] = Field(min_length=1, max_length=MAX_SPEECH_SENTENCES)
     force: StrictBool = False
+    voice: StrictStr = Field(default=VOICE, min_length=1, max_length=64)
+    configurationFingerprint: StrictStr | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
 
 def create_speech_service() -> SpeechJobs:
@@ -93,10 +96,33 @@ async def submit(
 ) -> dict:
     try:
         return await service.submit(
-            [SpeechSentence(item.id, item.text) for item in payload.sentences], payload.force
+            [SpeechSentence(item.id, item.text) for item in payload.sentences],
+            payload.force,
+            payload.voice,
+            payload.configurationFingerprint,
         )
     except SpeechError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+
+@router.get("/capabilities")
+async def capabilities(service: Annotated[SpeechJobs, Depends(get_speech_service)]) -> dict:
+    item = await service.capabilities()
+    return {
+        "available": item.available,
+        "reason": item.reason,
+        "defaultVoice": item.default_voice,
+        "model": item.model,
+        "language": item.language,
+        "voices": [
+            {
+                "id": voice.id,
+                "label": voice.label,
+                "configurationFingerprint": voice.configuration_fingerprint,
+            }
+            for voice in item.voices
+        ],
+    }
 
 
 @router.get("/jobs/{job_id}")

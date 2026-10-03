@@ -1,9 +1,18 @@
 import asyncio
+import hashlib
 import wave
 
 import pytest
 
-from shadowing_video_studio.speech import HeavyJobGate, SpeechError, SpeechReadiness, SpeechSentence
+from shadowing_video_studio.speech import (
+    VOICE,
+    HeavyJobGate,
+    SpeechCapabilities,
+    SpeechError,
+    SpeechReadiness,
+    SpeechSentence,
+    SpeechVoice,
+)
 from shadowing_video_studio.speech_assets import SpeechAssets
 from shadowing_video_studio.speech_jobs import SpeechJobs, validate_sentences
 
@@ -22,6 +31,7 @@ class FakeSpeech:
 
     def __init__(self):
         self.calls = []
+        self.voice_calls = []
         self.fail = set()
         self.available = True
         self.started = asyncio.Event()
@@ -31,8 +41,26 @@ class FakeSpeech:
     async def readiness(self):
         return SpeechReadiness(self.available, None if self.available else "Configure the runtime.")
 
-    async def generate(self, text, destination):
+    async def capabilities(self):
+        voices = tuple(
+            SpeechVoice(identifier, identifier, self.fingerprint_for_voice(identifier))
+            for identifier in ("Aiden", "Ryan")
+        )
+        return SpeechCapabilities(
+            self.available,
+            None if self.available else "Configure the runtime.",
+            voices,
+            VOICE,
+        )
+
+    def fingerprint_for_voice(self, voice):
+        if voice == VOICE:
+            return self.fingerprint
+        return hashlib.sha256(f"{self.fingerprint}:{voice}".encode()).hexdigest()
+
+    async def generate(self, text, destination, voice=VOICE):
         self.calls.append((text, destination))
+        self.voice_calls.append((text, destination, voice))
         self.started.set()
         if self.release:
             await self.release.wait()
@@ -172,6 +200,66 @@ def test_unavailable_preflight_releases_gate_without_generation(tmp_path):
             await service.submit([SpeechSentence("one", "One.")])
         assert error.value.status_code == 503
         assert not gate.busy and not provider.calls
+
+    asyncio.run(scenario())
+
+
+def test_nondefault_voice_is_frozen_reused_by_voice_and_preserves_prior_audio(tmp_path):
+    async def scenario():
+        provider = FakeSpeech()
+        assets = SpeechAssets(tmp_path)
+        service = SpeechJobs(provider, assets, HeavyJobGate())
+        sentence = [SpeechSentence("one", "A voice-specific sentence.")]
+        ryan_fingerprint = provider.fingerprint_for_voice("Ryan")
+
+        selected = await service.submit(
+            sentence, voice="Ryan", configuration_fingerprint=ryan_fingerprint
+        )
+        await service.wait()
+        frozen = service.get(selected["id"])
+        ryan_row = frozen["sentences"][0]
+        ryan_asset_id = ryan_row["assetId"]
+        assert frozen["voice"] == ryan_row["voice"] == "Ryan"
+        assert (
+            frozen["configurationFingerprint"]
+            == ryan_row["configurationFingerprint"]
+            == ryan_fingerprint
+        )
+        assert provider.voice_calls[-1][2] == "Ryan"
+        assert assets.match(ryan_asset_id, sentence[0], ryan_fingerprint, "Ryan").voice == "Ryan"
+
+        reused = await service.submit(sentence, voice="Ryan")
+        assert reused["status"] == "completed"
+        assert reused["sentences"][0]["reused"]
+        assert reused["sentences"][0]["assetId"] == ryan_asset_id
+
+        default = await service.submit(sentence, voice=VOICE)
+        await service.wait()
+        default_row = service.get(default["id"])["sentences"][0]
+        assert default_row["voice"] == VOICE and not default_row["reused"]
+        assert default_row["assetId"] != ryan_asset_id
+        assert assets.read(ryan_asset_id)
+        assert provider.voice_calls[-1][2] == VOICE
+        await service.close()
+
+    asyncio.run(scenario())
+
+
+def test_unsupported_and_stale_voice_selections_are_rejected_before_generation(tmp_path):
+    async def scenario():
+        provider = FakeSpeech()
+        gate = HeavyJobGate()
+        service = SpeechJobs(provider, SpeechAssets(tmp_path), gate)
+        sentence = [SpeechSentence("one", "One.")]
+        for voice, fingerprint, expected_status in (
+            ("Unknown", None, 422),
+            ("Ryan", "0" * 64, 409),
+        ):
+            with pytest.raises(SpeechError) as error:
+                await service.submit(sentence, voice=voice, configuration_fingerprint=fingerprint)
+            assert error.value.status_code == expected_status
+        assert not provider.voice_calls and not provider.calls and not gate.busy
+        await service.close()
 
     asyncio.run(scenario())
 

@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from shadowing_video_studio.providers.ffmpeg import FfmpegVideoRenderer
-from shadowing_video_studio.speech import SpeechError, SpeechSentence
+from shadowing_video_studio.speech import VOICE, SpeechError, SpeechSentence
 from shadowing_video_studio.speech_assets import OPAQUE_ID, SpeechAsset
 from shadowing_video_studio.speech_jobs import SpeechJobs, validate_sentences
 from shadowing_video_studio.video_rendering import (
@@ -180,6 +180,8 @@ class VideoJobs:
         self,
         selections: list[VideoSentenceSelection],
         background_asset_id: str | None = None,
+        voice: str = VOICE,
+        configuration_fingerprint: str | None = None,
     ) -> dict:
         selections = tuple(selections)
         if self._closed:
@@ -194,11 +196,17 @@ class VideoJobs:
         validate_sentences([SpeechSentence(item.id, item.text) for item in selections], False)
         if not self.speech.assets:
             raise VideoJobError("Configure speech and generate the current sentences first.", 503)
-        fingerprint = self.speech.provider.fingerprint
+        fingerprint = await self.speech.resolve_voice(voice, configuration_fingerprint)
         matched: tuple[SpeechAsset, ...] = tuple(
-            self.speech.assets.match(item.asset_id, SpeechSentence(item.id, item.text), fingerprint)
+            self.speech.assets.match(
+                item.asset_id, SpeechSentence(item.id, item.text), fingerprint, voice
+            )
             for item in selections
         )
+        if any(asset.voice != voice for asset in matched):
+            raise VideoJobError(
+                "Audio does not match the selected voice. Generate speech again.", 409
+            )
         frozen = tuple(
             FrozenVideoSentence(asset.sentence_id, asset.text, asset.path, asset.duration_seconds)
             for asset in matched
@@ -220,6 +228,8 @@ class VideoJobs:
             self._freeze_visuals, selections, background_asset_id
         )
         visual_bytes = sum(len(content) for _, content in visual_inputs.values())
+        if self._closed:
+            raise VideoJobError("Video service is stopping. Restart before submitting work.", 503)
         # Another attempt can finish while images are read; enforce capacity again at acceptance.
         if (
             len(self._jobs) >= MAX_VIDEO_JOBS
@@ -233,6 +243,10 @@ class VideoJobs:
             raise VideoJobError("A local media job is already running. Wait for it to finish.", 409)
         try:
             readiness = await self.readiness()
+            if self._closed:
+                raise VideoJobError(
+                    "Video service is stopping. Restart before submitting work.", 503
+                )
             if not readiness["available"]:
                 raise VideoJobError(readiness["reason"], 503)
             ffmpeg, ffprobe, font = self.settings.validated_paths()

@@ -1,15 +1,15 @@
 import { useEffect, useState } from "react";
-import { getCompleteSpeechSelection, type SpeechSelection } from "./domain/speech";
+import { getCompleteSpeechSelection, type SpeechBinding, type SpeechSelection } from "./domain/speech";
 import type { SentenceItem } from "./domain/sentences";
 import { videoAssetUrl } from "./videoApi";
 import type { useVideo } from "./useVideo";
 
-export function VideoControls({ video, sentences, selection, locked, backgroundAssetId = null,
+export function VideoControls({ video, sentences, selection, binding, locked, backgroundAssetId = null,
   illustrationsBySentence = {}, visualProblem = null }: {
-  video: ReturnType<typeof useVideo>; sentences: readonly SentenceItem[]; selection: SpeechSelection; locked: boolean;
+  video: ReturnType<typeof useVideo>; sentences: readonly SentenceItem[]; selection: SpeechSelection; binding: SpeechBinding | null; locked: boolean;
   backgroundAssetId?: string | null; illustrationsBySentence?: Readonly<Record<string, string>>; visualProblem?: string | null;
 }) {
-  const audio = getCompleteSpeechSelection(sentences, selection);
+  const audio = getCompleteSpeechSelection(sentences, selection, binding);
   const [selectedExport, setSelectedExport] = useState<string | null>(null);
   const [playbackError, setPlaybackError] = useState(false);
   useEffect(() => {
@@ -22,10 +22,10 @@ export function VideoControls({ video, sentences, selection, locked, backgroundA
       <div className="panel-heading video-heading">
         <span className="step-number" aria-hidden="true">03</span>
         <div><h2 id="video-title">Shadowing video</h2><p>1080p · One sentence per page · Five-second practice pauses</p></div>
-        <button type="button" className="primary-button" disabled={locked || video.waiting || video.outstanding || video.checking || !video.readiness?.available || audio === null || !!visualProblem}
-          onClick={() => { if (audio) void video.generate(audio.map(({ id, text, assetId }) => ({
+        <button type="button" className="primary-button" disabled={locked || video.waiting || video.outstanding || video.checking || !video.readiness?.available || !binding || audio === null || !!visualProblem}
+          onClick={() => { if (audio && binding) void video.generate(audio.map(({ id, text, assetId }) => ({
             id, text, assetId, illustrationAssetId: illustrationsBySentence[id] ?? null,
-          })), backgroundAssetId); }}>Generate video</button>
+          })), binding, backgroundAssetId); }}>Generate video</button>
       </div>
       <p className="field-help">Listen to the sentence audio before rendering. Each export freezes the current sentence order and audio; prior MP4 files are preserved.</p>
       {audio === null && <p className="field-help">Generate current audio for every sentence before rendering a video. Edited sentences need new speech.</p>}

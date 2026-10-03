@@ -1,7 +1,16 @@
 import { isWellFormedText, type SentenceItem } from "./domain/sentences";
-import { jobMatchesSnapshot, speechInputProblem, type SpeechJob, type SpeechSentence } from "./domain/speech";
+import { jobMatchesSnapshot, speechInputProblem, type SpeechBinding, type SpeechJob, type SpeechSentence } from "./domain/speech";
 
 export type SpeechStatus = { available: boolean; reason: string | null; voice: string; model: string; backend: string };
+export type SpeechVoice = { id: string; label: string; configurationFingerprint: string };
+export type SpeechCapabilities = {
+  available: boolean;
+  reason: string | null;
+  defaultVoice: string | null;
+  model: string;
+  language: "English";
+  voices: SpeechVoice[];
+};
 export class SpeechApiError extends Error {
   constructor(message: string, readonly status?: number) { super(message); }
 }
@@ -10,6 +19,7 @@ const INVALID_RESPONSE = "The local service returned invalid speech progress. Yo
 const UNAVAILABLE = "Speech is unavailable. Check the local service's configured workspace, Qwen runtime, and local model.";
 const GENERATION_FAILED = "Speech generation failed. Check the local runtime, then retry the affected sentence. Successful audio is preserved.";
 const opaqueId = /^[a-f0-9]{32}$/;
+const fingerprint = /^[a-f0-9]{64}$/;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -24,8 +34,10 @@ function safeError(value: unknown): boolean {
   return value === null || boundedText(value, 500);
 }
 function responseError(status: number): SpeechApiError {
-  if (status === 409 || status === 429) return new SpeechApiError("The local service is busy or this session's media limit is reached. Wait for its current job, or restart the service after saving your work.");
-  if (status === 400 || status === 413 || status === 422) return new SpeechApiError("The sentence list is invalid or too large. Review its text before generating speech.");
+  if (status === 409) return new SpeechApiError("The selected speech configuration may be stale, or a local job is still active. Refresh speech availability; after any job finishes, choose a currently listed voice and explicitly generate speech again.", status);
+  if (status === 422) return new SpeechApiError("The selected voice or speech configuration is unsupported or stale. Refresh speech availability, choose a currently listed voice, then explicitly generate speech again.", status);
+  if (status === 429) return new SpeechApiError("This session's speech media limit is reached. Restart the local service after saving your work.", status);
+  if (status === 400 || status === 413) return new SpeechApiError("The sentence list is invalid or too large. Review its text before generating speech.", status);
   if (status === 404) return new SpeechApiError("This speech job or audio is no longer available. After a service restart, generate speech again.", status);
   if (status === 503) return new SpeechApiError(UNAVAILABLE);
   return new SpeechApiError("The speech request could not be confirmed. The service may still be generating audio; check its progress before retrying. Your text and existing audio are preserved.");
@@ -55,16 +67,42 @@ export async function getSpeechStatus(signal?: AbortSignal): Promise<SpeechStatu
   return { available: value.available, reason: value.available ? null : UNAVAILABLE, voice: value.voice, model: value.model, backend: value.backend };
 }
 
-function validateJob(value: unknown, snapshot: readonly SentenceItem[], expectedId?: string): SpeechJob {
+export async function getSpeechCapabilities(signal?: AbortSignal): Promise<SpeechCapabilities> {
+  const value = await requestJson("/api/speech/capabilities", { signal });
+  if (!isRecord(value) || !hasExactKeys(value, ["available", "reason", "defaultVoice", "model", "language", "voices"])
+    || typeof value.available !== "boolean" || !safeError(value.reason)
+    || (value.defaultVoice !== null && (!boundedText(value.defaultVoice, 100) || !value.defaultVoice.trim()))
+    || !boundedText(value.model, 200) || !value.model.trim() || value.language !== "English"
+    || !Array.isArray(value.voices)) throw new SpeechApiError(INVALID_RESPONSE);
+  const voices: SpeechVoice[] = [];
+  const ids = new Set<string>();
+  for (const voice of value.voices as unknown[]) {
+    if (!isRecord(voice) || !hasExactKeys(voice, ["id", "label", "configurationFingerprint"])
+      || !boundedText(voice.id, 100) || !voice.id.trim() || ids.has(voice.id)
+      || !boundedText(voice.label, 120) || !voice.label.trim()
+      || typeof voice.configurationFingerprint !== "string" || !fingerprint.test(voice.configurationFingerprint)) {
+      throw new SpeechApiError(INVALID_RESPONSE);
+    }
+    ids.add(voice.id);
+    voices.push({ id: voice.id, label: voice.label, configurationFingerprint: voice.configurationFingerprint });
+  }
+  if (value.defaultVoice !== null && !ids.has(value.defaultVoice)) throw new SpeechApiError(INVALID_RESPONSE);
+  return { available: value.available, reason: value.reason as string | null, defaultVoice: value.defaultVoice as string | null,
+    model: value.model, language: "English", voices };
+}
+
+function validateJob(value: unknown, snapshot: readonly SentenceItem[], binding: SpeechBinding, expectedId?: string): SpeechJob {
   const invalid = () => new SpeechApiError(INVALID_RESPONSE);
-  if (!isRecord(value) || !hasExactKeys(value, ["id", "status", "sentences", "error"])
+  if (!isRecord(value) || !hasExactKeys(value, ["id", "status", "sentences", "error", "voice", "configurationFingerprint"])
     || typeof value.id !== "string" || !opaqueId.test(value.id) || (expectedId !== undefined && value.id !== expectedId)
+    || value.voice !== binding.voice || value.configurationFingerprint !== binding.configurationFingerprint
     || (value.status !== "queued" && value.status !== "running" && value.status !== "completed" && value.status !== "failed")
     || !safeError(value.error) || !Array.isArray(value.sentences) || value.sentences.length !== snapshot.length) throw invalid();
   const sentences: SpeechSentence[] = [];
   for (const item of value.sentences as unknown[]) {
-    if (!isRecord(item) || !hasExactKeys(item, ["id", "text", "status", "assetId", "durationSeconds", "error", "reused"])
+    if (!isRecord(item) || !hasExactKeys(item, ["id", "text", "status", "assetId", "durationSeconds", "error", "reused", "voice", "configurationFingerprint"])
       || !boundedText(item.id, 100) || !boundedText(item.text, 4_000)
+      || item.voice !== binding.voice || item.configurationFingerprint !== binding.configurationFingerprint
       || (item.status !== "pending" && item.status !== "generating" && item.status !== "ready" && item.status !== "failed")
       || (item.assetId !== null && (typeof item.assetId !== "string" || !opaqueId.test(item.assetId)))
       || (item.durationSeconds !== null && (typeof item.durationSeconds !== "number" || !Number.isFinite(item.durationSeconds) || item.durationSeconds <= 0))
@@ -74,29 +112,43 @@ function validateJob(value: unknown, snapshot: readonly SentenceItem[], expected
     } else if (item.assetId !== null || item.durationSeconds !== null || item.reused) throw invalid();
     if (item.status === "failed" && item.error === null) throw invalid();
     if ((item.status === "pending" || item.status === "generating") && item.error !== null) throw invalid();
-    sentences.push({ id: item.id, text: item.text, status: item.status, assetId: item.assetId,
+    sentences.push({ id: item.id, text: item.text, voice: binding.voice, configurationFingerprint: binding.configurationFingerprint,
+      status: item.status, assetId: item.assetId,
       durationSeconds: item.durationSeconds, error: item.error === null ? null : GENERATION_FAILED, reused: item.reused });
   }
-  const job: SpeechJob = { id: value.id, status: value.status, sentences, error: value.error === null ? null : GENERATION_FAILED };
-  if (!jobMatchesSnapshot(job, snapshot)) throw invalid();
+  const job: SpeechJob = { id: value.id, status: value.status, voice: binding.voice,
+    configurationFingerprint: binding.configurationFingerprint, sentences, error: value.error === null ? null : GENERATION_FAILED };
+  if (!jobMatchesSnapshot(job, snapshot, binding)) throw invalid();
   if (job.status === "completed" && (job.error !== null || sentences.some((item) => item.status !== "ready"))) throw invalid();
   if (job.status === "failed" && (job.error === null || sentences.some((item) => item.status === "pending" || item.status === "generating"))) throw invalid();
   return job;
 }
 
-export async function createSpeechJob(sentences: readonly SentenceItem[], force: boolean, signal?: AbortSignal): Promise<SpeechJob> {
+export async function createSpeechJob(
+  sentences: readonly SentenceItem[],
+  force: boolean,
+  binding: SpeechBinding,
+  signal?: AbortSignal,
+): Promise<SpeechJob> {
   const problem = speechInputProblem(sentences);
   if (problem) throw new SpeechApiError(problem);
   if (force && sentences.length !== 1) throw new SpeechApiError("Regenerate one sentence at a time.");
+  if (!binding.voice.trim() || !fingerprint.test(binding.configurationFingerprint)) throw new SpeechApiError("Choose a currently supported speech voice before generating.");
   const value = await requestJson("/api/speech/jobs", {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ sentences: sentences.map(({ id, text }) => ({ id, text })), force }), signal,
+    body: JSON.stringify({ sentences: sentences.map(({ id, text }) => ({ id, text })), force,
+      voice: binding.voice, configurationFingerprint: binding.configurationFingerprint }), signal,
   });
-  return validateJob(value, sentences);
+  return validateJob(value, sentences, binding);
 }
-export async function getSpeechJob(id: string, snapshot: readonly SentenceItem[], signal?: AbortSignal): Promise<SpeechJob> {
+export async function getSpeechJob(
+  id: string,
+  snapshot: readonly SentenceItem[],
+  binding: SpeechBinding,
+  signal?: AbortSignal,
+): Promise<SpeechJob> {
   if (!opaqueId.test(id)) throw new SpeechApiError(INVALID_RESPONSE);
-  return validateJob(await requestJson(`/api/speech/jobs/${id}`, { signal }), snapshot, id);
+  return validateJob(await requestJson(`/api/speech/jobs/${id}`, { signal }), snapshot, binding, id);
 }
 export function speechAssetUrl(id: string): string {
   if (!opaqueId.test(id)) throw new SpeechApiError("Invalid speech asset identifier.");

@@ -427,7 +427,7 @@ export default function App() {
           {visualSelectionState.storageWarning && <p className="input-error" role="status">{visualSelectionState.storageWarning}</p>}
 
           <SpeechControls speech={speech} sentences={sentenceDocument.sentences}
-            locked={editingLocked || video.outstanding || proposal !== null} />
+            locked={editingLocked || speech.outstanding || video.outstanding || proposal !== null} />
 
           {sentenceCount === 0 ? (
             <div className="empty-state">
@@ -470,7 +470,8 @@ export default function App() {
                         onChange={(assetId) => visualSelectionState.setSentenceIllustration(sentence.id, assetId)}
                         disabled={editingLocked} />
                       <SentenceSpeech sentence={sentence} position={position} selection={speech.selection} job={speech.job}
-                        disabled={editingLocked || speech.outstanding || video.outstanding || proposal !== null || !speech.readiness?.available}
+                        binding={speech.binding}
+                        disabled={editingLocked || speech.outstanding || video.outstanding || proposal !== null || !speech.readiness?.available || !speech.capabilities?.available}
                         regenerate={() => { void speech.generate([sentence], true); }} />
                     </li>
                   );
@@ -480,7 +481,7 @@ export default function App() {
           )}
         </section>
       </div>
-      <VideoControls video={video} sentences={sentenceDocument.sentences} selection={speech.selection}
+      <VideoControls video={video} sentences={sentenceDocument.sentences} selection={speech.selection} binding={speech.binding}
         locked={editingLocked || speech.outstanding || proposal !== null} backgroundAssetId={backgroundAssetId}
         illustrationsBySentence={illustrationsBySentence} visualProblem={visualProblem} />
     </main>

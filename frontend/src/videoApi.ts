@@ -1,4 +1,4 @@
-import { speechInputProblem } from "./domain/speech";
+import { speechInputProblem, type SpeechBinding } from "./domain/speech";
 
 export type VideoSentence = { id: string; text: string; assetId: string; illustrationAssetId?: string | null };
 export type VideoStatus = { available: boolean; reason: string | null };
@@ -19,6 +19,7 @@ const opaqueId = /^[a-f0-9]{32}$/;
 const INVALID = "The local service returned invalid video progress. Your dialogue, speech, and prior exports are preserved.";
 const UNAVAILABLE = "Video rendering is unavailable. Check the local service's workspace, FFmpeg, and font configuration.";
 const FAILED = "Video rendering failed. Check the local renderer, then explicitly try again. Your speech and prior exports are preserved.";
+const fingerprint = /^[a-f0-9]{64}$/;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -31,8 +32,10 @@ function isSafeError(value: unknown): boolean {
 }
 function responseError(status: number): VideoApiError {
   if (status === 404) return new VideoApiError("This video job or export is unavailable in this service session. After a service restart, generate speech and video again.", status);
-  if (status === 400 || status === 413 || status === 422) return new VideoApiError("The video input is invalid. Ensure every current sentence has matching audio; split long sentences to fit the page before regenerating speech.");
-  if (status === 409 || status === 429) return new VideoApiError("The local service is busy, its session limit is reached, or audio no longer matches. Wait for current work, then regenerate the affected speech before retrying.");
+  if (status === 422) return new VideoApiError("The selected voice or speech configuration is unsupported or stale. Refresh speech availability, choose a listed voice, explicitly generate its audio, then retry video.", status);
+  if (status === 409) return new VideoApiError("The local service is busy or the audio no longer matches the selected speech settings. Wait for current work, refresh speech availability, explicitly regenerate affected audio, then retry video.", status);
+  if (status === 400 || status === 413) return new VideoApiError("The video input is invalid. Ensure every current sentence has matching audio; split long sentences to fit the page before regenerating speech.", status);
+  if (status === 429) return new VideoApiError("The local service session limit is reached. Restart the service after saving your work.", status);
   if (status === 503) return new VideoApiError(UNAVAILABLE);
   return new VideoApiError("The video request could not be confirmed. The local renderer may still be running; check its progress before retrying. Your speech and prior exports are preserved.");
 }
@@ -74,6 +77,7 @@ function validateJob(value: unknown, total: number, expectedId?: string): VideoJ
 }
 export async function createVideoJob(
   sentences: readonly VideoSentence[],
+  binding: SpeechBinding,
   backgroundAssetId?: string | null,
   signal?: AbortSignal,
 ): Promise<VideoJob> {
@@ -81,6 +85,9 @@ export async function createVideoJob(
   if (problem) throw new VideoApiError(problem);
   if (sentences.some((sentence) => !opaqueId.test(sentence.assetId))) {
     throw new VideoApiError("Every sentence needs current generated audio before rendering video.");
+  }
+  if (!binding.voice.trim() || !fingerprint.test(binding.configurationFingerprint)) {
+    throw new VideoApiError("Choose a currently supported speech voice before rendering video.");
   }
   if (sentences.some((sentence) => sentence.illustrationAssetId != null && !opaqueId.test(sentence.illustrationAssetId))
     || (backgroundAssetId != null && !opaqueId.test(backgroundAssetId))) {
@@ -93,6 +100,8 @@ export async function createVideoJob(
         id, text, assetId,
         ...(illustrationAssetId == null ? {} : { illustrationAssetId }),
       })),
+      voice: binding.voice,
+      configurationFingerprint: binding.configurationFingerprint,
       ...(backgroundAssetId == null ? {} : { backgroundAssetId }),
     }), signal,
   }), sentences.length);

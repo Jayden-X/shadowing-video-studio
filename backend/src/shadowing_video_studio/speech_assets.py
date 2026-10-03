@@ -15,6 +15,7 @@ from shadowing_video_studio.speech import (
     MAX_SESSION_BYTES,
     MAX_WAV_BYTES,
     MAX_WAV_SECONDS,
+    VOICE,
     SpeechError,
     SpeechSentence,
 )
@@ -32,6 +33,7 @@ class SpeechAsset:
     path: Path
     size_bytes: int
     sha256: str
+    voice: str = VOICE
 
 
 class SpeechAssets:
@@ -98,7 +100,12 @@ class SpeechAssets:
         return content
 
     def register(
-        self, asset_id: str, sentence: SpeechSentence, fingerprint: str, path: Path
+        self,
+        asset_id: str,
+        sentence: SpeechSentence,
+        fingerprint: str,
+        path: Path,
+        voice: str = VOICE,
     ) -> SpeechAsset:
         if (
             not OPAQUE_ID.fullmatch(asset_id)
@@ -131,6 +138,7 @@ class SpeechAssets:
             path,
             len(content),
             hashlib.sha256(content).hexdigest(),
+            voice,
         )
         self._assets[asset_id] = asset
         self._cache[(sentence.id, sentence.text, fingerprint)] = asset_id
@@ -149,25 +157,30 @@ class SpeechAssets:
         except OSError as exc:
             raise SpeechError("The audio asset is no longer available.", 404) from exc
 
-    def match(self, asset_id: str, sentence: SpeechSentence, fingerprint: str) -> SpeechAsset:
+    def match(
+        self, asset_id: str, sentence: SpeechSentence, fingerprint: str, voice: str = VOICE
+    ) -> SpeechAsset:
         """Later rendering must validate the exact frozen ID/text/config binding."""
         self.read(asset_id)
         asset = self._assets[asset_id]
-        if (asset.sentence_id, asset.text, asset.fingerprint) != (
+        if (asset.sentence_id, asset.text, asset.fingerprint, asset.voice) != (
             sentence.id,
             sentence.text,
             fingerprint,
+            voice,
         ):
             raise SpeechError(
                 "Audio no longer matches the reviewed sentence. Generate it again.", 409
             )
         return asset
 
-    def reusable(self, sentence: SpeechSentence, fingerprint: str) -> SpeechAsset | None:
+    def reusable(
+        self, sentence: SpeechSentence, fingerprint: str, voice: str = VOICE
+    ) -> SpeechAsset | None:
         asset_id = self._cache.get((sentence.id, sentence.text, fingerprint))
         if not asset_id:
             return None
         try:
-            return self.match(asset_id, sentence, fingerprint)
+            return self.match(asset_id, sentence, fingerprint, voice)
         except SpeechError:
             return None
