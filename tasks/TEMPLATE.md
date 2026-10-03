@@ -2,15 +2,19 @@
 
 ## Goal
 
-One clear outcome.
+One clear user or engineering outcome.
 
 ## Context
 
-Why this task exists and what existing behavior/docs matter.
+Why this task exists and which requirements/ADRs/standards are relevant.
 
 ## Requirements
 
 - 
+
+## Architecture constraints
+
+- None, or list the relevant constraints.
 
 ## Acceptance criteria
 
@@ -23,18 +27,24 @@ Why this task exists and what existing behavior/docs matter.
 
 ## Validation
 
-- [ ] Unit/integration/UI checks as appropriate
-- [ ] Repository lint/test/build commands pass
-- [ ] Manual smoke check if needed
+- [ ] Relevant unit/integration/UI tests
+- [ ] `bash scripts/check.sh` or the documented equivalent
+- [ ] Manual smoke check when required
 
 ## Human decisions required
 
-None / describe the exact decision.
+None, or describe the exact unresolved decision.
+
+## Standards affected
+
+None, or list any recurring rule/problem that should update `docs/standards/`.
 
 ## Implementation notes
 
-Filled in during/after implementation:
-- changed files/components
-- tradeoffs
+Fill in during/after implementation:
+
+- changed modules/files
+- important implementation choices
+- validation actually performed
 - limitations
-- follow-up work
+- follow-up tasks
