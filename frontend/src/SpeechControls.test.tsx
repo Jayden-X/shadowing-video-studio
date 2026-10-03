@@ -1,0 +1,251 @@
+import { act, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import App from "./App";
+
+const jobId = "a".repeat(32);
+const firstAsset = "b".repeat(32);
+const nextAsset = "c".repeat(32);
+type Snapshot = { id: string; text: string }[];
+function job(snapshot: Snapshot, status: "completed" | "running" | "failed" = "completed", asset = firstAsset) {
+  return { id: jobId, status, error: status === "failed" ? "raw private detail" : null,
+    sentences: snapshot.map((sentence, index) => ({ ...sentence,
+      status: status === "running" ? (index === 0 ? "generating" : "pending") : status === "failed" && index === 1 ? "failed" : "ready",
+      assetId: status === "running" || (status === "failed" && index === 1) ? null : asset,
+      durationSeconds: status === "running" || (status === "failed" && index === 1) ? null : 1.5,
+      error: status === "failed" && index === 1 ? "raw private detail" : null, reused: false,
+    })) };
+}
+function json(value: unknown, status = 200) { return new Response(JSON.stringify(value), { status }); }
+function mockSpeech(create: (snapshot: Snapshot, force: boolean, init: RequestInit | undefined) => Response | Promise<Response>,
+  poll: (init: RequestInit | undefined) => Response | Promise<Response> = () => json({})) {
+  const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+    if (url === "/api/speech/status") return json({ available: true, reason: null, voice: "Aiden", model: "Qwen3-TTS-12Hz-0.6B-CustomVoice", backend: "cpu" });
+    if (url === "/api/text/providers") return json({ providers: ["codex", "deepseek"].map((id) => ({ id, label: id, available: false, reason: "unavailable" })) });
+    if (url === "/api/speech/jobs") {
+      const body = JSON.parse(init?.body as string) as { sentences: Snapshot; force: boolean };
+      return create(body.sentences, body.force, init);
+    }
+    if (url === `/api/speech/jobs/${jobId}`) return poll(init);
+    return json({ status: "ok" });
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
+}
+function button(name: string) { return screen.getByRole("button", { name }) as HTMLButtonElement; }
+function sentence(position: number) { return screen.getByRole("textbox", { name: `Sentence ${position}` }) as HTMLTextAreaElement; }
+async function prepare(source = "Hello. Next.") {
+  await act(async () => {});
+  fireEvent.change(screen.getByRole("textbox", { name: "Source dialogue" }), { target: { value: source } });
+  fireEvent.click(button("Prepare sentences"));
+}
+function previews() { return document.querySelectorAll("audio"); }
+afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
+
+describe("sentence speech UI", () => {
+  it("requires explicit generation, previews success and regenerates one frozen sentence", async () => {
+    const fetchMock = mockSpeech((snapshot, force) => json(job(snapshot, "completed", force ? nextAsset : firstAsset), 202));
+    render(<App />);
+    await prepare();
+    expect(previews()).toHaveLength(0);
+    expect(fetchMock.mock.calls.filter(([url]) => url === "/api/speech/jobs")).toHaveLength(0);
+    await act(async () => { fireEvent.click(button("Generate speech")); });
+    expect(previews()).toHaveLength(2);
+    expect(previews()[0].getAttribute("src")).toBe(`/api/speech/assets/${firstAsset}`);
+    expect(previews()[0].getAttribute("preload")).toBe("none");
+    expect(previews()[0].hasAttribute("controls")).toBe(true);
+    await act(async () => { fireEvent.click(button("Regenerate speech for sentence 1")); });
+    expect(previews()[0].getAttribute("src")).toBe(`/api/speech/assets/${nextAsset}`);
+    expect(previews()[1].getAttribute("src")).toBe(`/api/speech/assets/${firstAsset}`);
+    const posts = fetchMock.mock.calls.filter(([url]) => url === "/api/speech/jobs");
+    expect(JSON.parse(posts[1][1]?.body as string)).toEqual({ sentences: [{ id: "sentence-001", text: "Hello." }], force: true });
+    expect(sentence(1).value).toBe("Hello.");
+  });
+  it("shows reused audio and invalidates edited, merged, deleted, and replaced content", async () => {
+    mockSpeech((snapshot) => json({ ...job(snapshot), sentences: job(snapshot).sentences.map((item) => ({ ...item, reused: true })) }, 202));
+    render(<App />);
+    await prepare();
+    await act(async () => { fireEvent.click(button("Generate speech")); });
+    expect(screen.getAllByText(/Reused/)).toHaveLength(2);
+    fireEvent.change(sentence(1), { target: { value: "Changed." } });
+    expect(previews()).toHaveLength(1);
+    expect(screen.getByText(/Text changed/)).toBeTruthy();
+    fireEvent.click(button("Merge sentence 2 with previous"));
+    expect(previews()).toHaveLength(0);
+    await act(async () => { fireEvent.click(button("Generate speech")); });
+    expect(previews()).toHaveLength(1);
+    fireEvent.click(button("Delete sentence 1"));
+    expect(previews()).toHaveLength(0);
+    await prepare("Hello. Next.");
+    fireEvent.click(button("Replace and prepare"));
+    expect(previews()).toHaveLength(0);
+  });
+  it("preserves partial success and hides raw provider errors", async () => {
+    mockSpeech((snapshot) => json(job(snapshot, "failed"), 202));
+    render(<App />);
+    await prepare();
+    await act(async () => { fireEvent.click(button("Generate speech")); });
+    expect(previews()).toHaveLength(1);
+    expect(screen.getByRole("alert").textContent).toContain("Successful audio is preserved");
+    expect(screen.queryByText(/raw private/)).toBeNull();
+    expect(sentence(1).value).toBe("Hello.");
+    expect(sentence(2).value).toBe("Next.");
+  });
+  it("locks editing, prevents duplicate submits, polls progress and unlocks after completion", async () => {
+    vi.useFakeTimers();
+    let snapshot: Snapshot = [];
+    const fetchMock = mockSpeech((sentences) => { snapshot = sentences; return json(job(sentences, "running"), 202); }, () => json(job(snapshot)));
+    render(<App />);
+    await prepare();
+    await act(async () => { fireEvent.click(button("Generate speech")); fireEvent.click(button("Generate speech")); });
+    expect(sentence(1).disabled).toBe(true);
+    expect(button("Add sentence").disabled).toBe(true);
+    expect(button("Prepare sentences").disabled).toBe(true);
+    expect(screen.getByText("Generating this sentence…")).toBeTruthy();
+    expect(fetchMock.mock.calls.filter(([url]) => url === "/api/speech/jobs")).toHaveLength(1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+    expect(previews()).toHaveLength(2);
+    expect(sentence(1).disabled).toBe(false);
+    expect(screen.queryByRole("button", { name: "Stop waiting for speech" })).toBeNull();
+  });
+  it("stops monitoring without resubmitting and discards stale results after document replacement", async () => {
+    vi.useFakeTimers();
+    let snapshot: Snapshot = [];
+    let resolvePoll!: (response: Response) => void;
+    let pollSignal: AbortSignal | null | undefined;
+    let pollCount = 0;
+    const fetchMock = mockSpeech((sentences) => { snapshot = sentences; return json(job(sentences, "running"), 202); }, (init) => {
+      pollCount += 1;
+      if (pollCount > 1) return json(job(snapshot));
+      pollSignal = init?.signal;
+      return new Promise<Response>((resolve) => { resolvePoll = resolve; });
+    });
+    render(<App />);
+    await prepare();
+    await act(async () => { fireEvent.click(button("Generate speech")); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+    fireEvent.click(button("Stop waiting for speech"));
+    expect(pollSignal?.aborted).toBe(true);
+    expect(sentence(1).disabled).toBe(false);
+    expect(button("Generate speech").disabled).toBe(true);
+    expect(screen.getByText(/does not cancel generation/)).toBeTruthy();
+    await prepare("New document.");
+    fireEvent.click(button("Replace and prepare"));
+    await act(async () => { resolvePoll(json(job(snapshot))); });
+    expect(previews()).toHaveLength(0);
+    await act(async () => { fireEvent.click(button("Resume speech monitoring")); });
+    expect(previews()).toHaveLength(0);
+    expect(sentence(1).value).toBe("New document.");
+    expect(fetchMock.mock.calls.filter(([url]) => url === "/api/speech/jobs")).toHaveLength(1);
+    expect(button("Generate speech").disabled).toBe(false);
+  });
+  it("keeps old audio on regeneration failure and explains playback failure", async () => {
+    let fail = false;
+    mockSpeech((snapshot) => fail ? json({ detail: "private traceback" }, 500) : json(job(snapshot), 202));
+    render(<App />);
+    await prepare("Hello.");
+    await act(async () => { fireEvent.click(button("Generate speech")); });
+    fail = true;
+    await act(async () => { fireEvent.click(button("Regenerate speech for sentence 1")); });
+    expect(previews()).toHaveLength(1);
+    expect(sentence(1).value).toBe("Hello.");
+    fireEvent.error(previews()[0]);
+    expect(screen.getAllByRole("alert").some((alert) => alert.textContent?.includes("could not be played"))).toBe(true);
+    expect(screen.queryByText(/private traceback/)).toBeNull();
+  });
+  it("aborts pending polling and clears timers on unmount", async () => {
+    vi.useFakeTimers();
+    let signal: AbortSignal | null | undefined;
+    let snapshot: Snapshot = [];
+    const fetchMock = mockSpeech((sentences) => { snapshot = sentences; return json(job(sentences, "running"), 202); }, (init) => {
+      signal = init?.signal;
+      return new Promise<Response>(() => {});
+    });
+    const view = render(<App />);
+    await prepare();
+    await act(async () => { fireEvent.click(button("Generate speech")); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+    view.unmount();
+    expect(signal?.aborted).toBe(true);
+    await act(async () => { await vi.advanceTimersByTimeAsync(15 * 60_000); });
+    expect(fetchMock.mock.calls.filter(([url]) => url === `/api/speech/jobs/${jobId}`)).toHaveLength(1);
+    expect(snapshot).toHaveLength(2);
+  });
+  it("bounds waiting and keeps a known job resumable after a polling failure", async () => {
+    vi.useFakeTimers();
+    mockSpeech((snapshot) => json(job(snapshot, "running"), 202), () => json({ detail: "private error" }, 503));
+    render(<App />);
+    await prepare();
+    await act(async () => { fireEvent.click(button("Generate speech")); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+    expect(button("Resume speech monitoring")).toBeTruthy();
+    expect(button("Generate speech").disabled).toBe(true);
+    expect(sentence(1).disabled).toBe(false);
+    expect(screen.queryByText(/private error/)).toBeNull();
+  });
+  it("ends a hanging poll after 15 minutes while preserving a resumable job", async () => {
+    vi.useFakeTimers();
+    let signal: AbortSignal | null | undefined;
+    mockSpeech((snapshot) => json(job(snapshot, "running"), 202), (init) => {
+      signal = init?.signal;
+      return new Promise<Response>(() => {});
+    });
+    render(<App />);
+    await prepare();
+    await act(async () => { fireEvent.click(button("Generate speech")); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(15 * 60_000); });
+    expect(signal?.aborted).toBe(true);
+    expect(screen.getByText(/Stopped waiting after 15 minutes/)).toBeTruthy();
+    expect(button("Resume speech monitoring")).toBeTruthy();
+    expect(sentence(1).disabled).toBe(false);
+    expect(sentence(1).value).toBe("Hello.");
+  });
+  it("recovers from a service restart instead of resuming a missing job forever", async () => {
+    vi.useFakeTimers();
+    mockSpeech((snapshot) => json(job(snapshot, "running"), 202), () => json({ detail: "gone" }, 404));
+    render(<App />);
+    await prepare();
+    await act(async () => { fireEvent.click(button("Generate speech")); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+    expect(screen.getByRole("alert").textContent).toContain("service restart");
+    expect(screen.queryByRole("button", { name: "Resume speech monitoring" })).toBeNull();
+    expect(button("Generate speech").disabled).toBe(false);
+    expect(sentence(1).value).toBe("Hello.");
+  });
+  it("stops an unconfirmed submission and ignores its late result", async () => {
+    let resolve!: (response: Response) => void;
+    let snapshot: Snapshot = [];
+    let signal: AbortSignal | null | undefined;
+    mockSpeech((sentences, _force, init) => {
+      snapshot = sentences;
+      signal = init?.signal;
+      return new Promise<Response>((done) => { resolve = done; });
+    });
+    render(<App />);
+    await prepare();
+    await act(async () => { fireEvent.click(button("Generate speech")); });
+    fireEvent.click(button("Stop waiting for speech"));
+    expect(signal?.aborted).toBe(true);
+    expect(screen.getByText(/submission could not be confirmed/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Resume speech monitoring" })).toBeNull();
+    expect(button("Generate speech").disabled).toBe(false);
+    await act(async () => { resolve(json(job(snapshot), 202)); });
+    expect(previews()).toHaveLength(0);
+  });
+  it("refreshes readiness without losing the edited document", async () => {
+    let available = false;
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url === "/api/speech/status") return json({ available, reason: available ? null : "unavailable", voice: "Aiden", model: "model", backend: "cpu" });
+      if (url === "/api/text/providers") return json({ providers: ["codex", "deepseek"].map((id) => ({ id, label: id, available: false, reason: "unavailable" })) });
+      return json({ status: "ok" });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<App />);
+    await prepare("Keep my work.");
+    expect(button("Generate speech").disabled).toBe(true);
+    available = true;
+    await act(async () => { fireEvent.click(button("Check speech availability")); });
+    expect(button("Generate speech").disabled).toBe(false);
+    expect(sentence(1).value).toBe("Keep my work.");
+    expect(fetchMock.mock.calls.filter(([url]) => url === "/api/speech/status")).toHaveLength(2);
+  });
+});

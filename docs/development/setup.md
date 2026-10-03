@@ -113,6 +113,10 @@ The actual acceleration/backend behavior on the target Mac must be validated bef
 
 ## Environment configuration
 
+For optional sentence generation, see [local speech runtime](speech-runtime.md). It reuses
+the validated CPU/0.6B/Aiden environment and frozen model; ordinary backend setup does not
+install or download that model.
+
 Copy the committed template if local provider credentials are needed:
 
 ```bash

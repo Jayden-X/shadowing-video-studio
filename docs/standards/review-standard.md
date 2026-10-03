@@ -4,6 +4,15 @@
 
 Review should verify behavior, boundaries, maintainability, and evidence—not formatting preferences already enforced by tools.
 
+## Current MVP review scope
+
+For the current MVP, focus OCR and code review on backend production logic and critical
+code: workflow transitions, provider/process boundaries, media bindings, data safety and
+failure recovery. Frontend code and frontend/backend unit-test files are excluded from
+OCR and code review under the owner's selected scope; existing test/build/CI checks remain.
+Use the selected GPT-6 Luna/max reviewer. Report coverage for the selected critical scope,
+and identify excluded areas without expanding the review to cover low-impact details.
+
 ## Required review questions
 
 ### Product
