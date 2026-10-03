@@ -22,7 +22,7 @@ button {
 }
 button:hover:not(:disabled) { background: #edf4ef; border-color: #92af9f; }
 button:disabled { opacity: 0.45; cursor: not-allowed; }
-button:focus-visible, textarea:focus-visible, select:focus-visible, input:focus-visible, summary:focus-visible, audio:focus-visible {
+button:focus-visible, textarea:focus-visible, select:focus-visible, input:focus-visible, summary:focus-visible, audio:focus-visible, video:focus-visible, a:focus-visible {
   outline: 3px solid #85b5a0;
   outline-offset: 3px;
 }
@@ -99,6 +99,18 @@ label { display: block; margin-bottom: 8px; font-size: 13px; font-weight: 600; }
 .sentence-speech { margin-top: 16px; padding-top: 12px; border-top: 1px solid #dfe6de; }
 .sentence-speech audio { display: block; width: 100%; max-width: 400px; margin: 12px 0; }
 .sentence-speech button { margin-top: 10px; }
+.video-panel { margin-top: 24px; }
+.video-heading { flex-wrap: wrap; }
+.video-heading > button { margin-left: auto; }
+.video-progress { margin-top: 16px; color: #426a54; font-size: 13px; }
+.video-progress button { margin-top: 12px; }
+.video-preview { margin-top: 24px; }
+.video-preview video { display: block; width: 100%; max-width: 960px; margin: 16px 0; border-radius: 10px; background: #1b2f27; }
+.download-link { display: inline-block; padding: 10px 14px; border-radius: 8px; background: #315d48; color: #fff; text-decoration: none; font-size: 13px; font-weight: 600; }
+.download-link:hover { background: #244936; }
+.export-list { display: grid; gap: 8px; margin-top: 20px; padding-left: 22px; }
+.export-list li { padding-left: 4px; }
+.export-list a { margin-left: 16px; color: #315d48; font-size: 13px; }
 .delete-button { color: #965d50; }
 .delete-button:hover:not(:disabled) { background: #fff2ee; border-color: #d6a69a; }
 .confirmation { display: flex; align-items: center; justify-content: space-between; gap: 24px; background: #fdf7e8; border: 1px solid #e2d1a5; border-radius: 12px; padding: 20px; margin-bottom: 24px; }
