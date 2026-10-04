@@ -3,7 +3,7 @@
 ## Priority and status
 
 - Priority: **P3** — after the accepted MVP and P2 visual/voice features.
-- Status: **in progress** — owner approved [ADR 0004](../../docs/architecture/decisions/0004-project-history-persistence.md) on 2026-10-04.
+- Status: **done** — owner accepted the Mac workflow on 2026-10-04; owner approved [ADR 0004](../../docs/architecture/decisions/0004-project-history-persistence.md) on 2026-10-04.
 
 ## Goal
 
@@ -57,19 +57,19 @@ No cloud/account synchronization or scheduler/MCP implementation in this task.
 
 ## Acceptance criteria
 
-- [ ] Save/reopen after browser/service restart restores source, stable sentence IDs,
+- [x] Save/reopen after browser/service restart restores source, stable sentence IDs,
   order/edits, voice, background and illustration associations.
-- [ ] Completed outputs remain listed with their original input/configuration snapshots;
+- [x] Completed outputs remain listed with their original input/configuration snapshots;
   later edits or generation preserve earlier media and history records.
-- [ ] Matching saved audio restores without a model call and supports normal preview/export.
-- [ ] Voice/text/configuration changes prevent stale audio reuse; valid historical MP4s
+- [x] Matching saved audio restores without a model call and supports normal preview/export.
+- [x] Voice/text/configuration changes prevent stale audio reuse; valid historical MP4s
   remain accessible against their recorded snapshots.
-- [ ] Missing/corrupt cache/project/asset metadata or media gives an actionable error,
+- [x] Missing/corrupt cache/project/asset metadata or media gives an actionable error,
   preserving recoverable editor state and unrelated assets, without automatic inference.
-- [ ] Forged references/paths cannot serve unrelated files or bypass integrity/binding checks.
-- [ ] Browser cache clearing still permits reopening locally saved projects; missing local
+- [x] Forged references/paths cannot serve unrelated files or bypass integrity/binding checks.
+- [x] Browser cache clearing still permits reopening locally saved projects; missing local
   files are reported as unavailable.
-- [ ] Failed/interrupted saves preserve the last successful state under the selected
+- [x] Failed/interrupted saves preserve the last successful state under the selected
   atomic recovery policy and clearly identify unsaved changes.
 
 ## Out of scope
@@ -150,3 +150,43 @@ remain required; this waiver does not change the repository-wide review policy.
   Subsequent SSH connections timed out, before real speech/video smoke execution could be
   confirmed. Actual media/restart and owner browser acceptance remain **unverified**;
   the owner was asked to restore the SSH connection. The task remains in progress.
+
+### Accepted Mac validation and final delivery — 2026-10-04
+
+The owner confirmed: **saving, restoration and historical video all work; acceptance passed**.
+
+- Official CPU/0.6B Aiden synthesized the real one-sentence validation input. Export with
+  existing background/illustration completed: **7.1 s, H.264/AAC, 1920x1080**. Full FFmpeg
+  decoding passed; the sampled practice pause decoded to zero PCM values.
+- Restarted the owned service and recovered the exact saved editor snapshot, stable IDs,
+  nextSequence, Aiden/image choices, audio ID/hash and immutable video history/hash.
+  Reuse returned completed with `reused=true` and produced no new WAV file.
+- Editing text excluded the old audio; restoring the original text recovered the same
+  recording. Temporarily hiding only the newly created validation WAV reported it missing
+  while preserving the editor and historical video; the file was restored in finally.
+  All **8 existing MP4 files** checked at that point remained byte-identical.
+- The Mac validation project was subsequently edited during owner acceptance. A later
+  assertion detected its changed snapshot and stopped without changing it. The final
+  integration export used a separate synthetic project, preserving those owner edits.
+- Integrated latest main `c7b8b7d` (Task012) without conflicts. Final local checks:
+  **206 backend tests passed, 4 Windows permission/environment skips; 167 frontend tests
+  passed; typecheck, production build and Ruff lint/format passed**. Spike syntax and
+  deterministic helper checks also passed as recorded above.
+- Deployed the integrated build on the approved Mac, preserving two existing projects.
+  A separate background/no-illustration real export completed at **6.866667 s**; saved
+  bindings/history remained readable. Range preview and attachment download were checked.
+- Mac service URL: `http://127.0.0.1:8877/`, one worker. Source:
+  `/Users/qinwei/Documents/shadowing-video-studio/tmp/task008-20261004-001/source-003`.
+  Settings/log/PID files: `settings-003.json`, `server-003.log`, `server-003.pid` within
+  the same stage. Runtime evidence stays under its ignored `evidence/` directory;
+  no media, credentials, SQLite state or private dialogue is committed.
+- Workspace remains the existing approved `tmp/first-video.igZFtODV/media`. The separate
+  Mac Git checkout and other collaborators' code were not reset or overwritten. The
+  existing external FFmpeg/FFprobe/font locations were only read/executed.
+- Corrective head `4e0e3e5` passed all three GitHub CI jobs. Final integrated/docs head
+  must pass the same checks before PR #15 is squash merged; one Task008 commit enters main.
+
+Limitations: no automatic import of old unregistered media, deletion/pruning, cross-device
+sync or automatic job resumption. The owner confirmed three future cleanup modes; they
+are recorded separately in [Task014](../backlog/014-project-resource-cleanup.md).
+Code review was explicitly waived for this task; no review completion is claimed.

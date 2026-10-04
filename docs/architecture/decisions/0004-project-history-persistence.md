@@ -2,7 +2,7 @@
 
 - Status: **Accepted — owner approved the proposed scope and choices on 2026-10-04**
 - Date: 2026-10-04
-- Task: [008](../../../tasks/in-progress/008-project-history-persistence.md)
+- Task: [008](../../../tasks/done/008-project-history-persistence.md)
 - Baseline: `055b081` on `main`
 
 ## Context
@@ -11,7 +11,7 @@ Task008 consolidates project saving, output history and restart audio reuse. The
 MVP already preserves media bytes, but cannot reconstruct their trusted associations
 after a service restart.
 
-Current code establishes these useful boundaries:
+At the recorded pre-Task008 baseline, code established these boundaries:
 
 - `frontend/src/App.tsx` keeps the current source draft separately from the prepared
   document's source snapshot. Both must be saved; they can legitimately differ.
@@ -280,7 +280,7 @@ The owner approved these choices on 2026-10-04:
 3. Minimal project controls + immutable output history; preserve older files without
    automatic import of unregistered legacy media or cross-device project sync.
 
-Task008 is in progress under this accepted decision.
+Task008 implements this decision; the owner accepted the Mac save/reopen/history workflow on 2026-10-04. Actual validation and delivery evidence is recorded in its task file.
 
 ## Technical references
 
