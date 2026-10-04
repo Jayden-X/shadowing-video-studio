@@ -68,7 +68,7 @@ Task013 enables local AI clients to discover capabilities, prepare sentence prop
 
 MCP must use the same application commands, validation, permissions, and human-review rules as the UI or a future CLI. It must not modify project files/state directly or bypass review. Starting, resuming, cancelling, and exporting work must respect the user's declared approval policy and validated inputs.
 
-The first MCP boundary is local. Task013 and ADR0005 select the approved Streamable HTTP
+The first MCP boundary is local. Task013 and ADR0006 select the approved Streamable HTTP
 adapter and local read/execute access policy. Remote access, accounts and automatic
 review bypass remain out of scope. MCP project/history integration remains a follow-up against the initial Task008 branch.
 

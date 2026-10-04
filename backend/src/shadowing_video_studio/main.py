@@ -29,7 +29,9 @@ async def lifespan(application: FastAPI):
     application.state.speech = create_speech_service(application.state.projects.assets)
     application.state.visuals = create_visual_service()
     application.state.video = create_video_service(
-        application.state.speech, visuals=application.state.visuals.library
+        application.state.speech,
+        visuals=application.state.visuals.library,
+        project_store=application.state.projects.store,
     )
     application.state.control = ApplicationControl(
         application.state.speech, application.state.video

@@ -58,7 +58,7 @@ represented by fake-provider tests.
 ## Human decisions required
 
 The owner explicitly approved the official SDK and the default-disabled, direct-local
-read/execute credential and per-request human-review policy on 2026-10-04. See ADR0005.
+read/execute credential and per-request human-review policy on 2026-10-04. See ADR0006.
 
 ## Implementation notes
 
@@ -69,7 +69,7 @@ frontend build. Task008 follow-up must attach reviewed requests to authoritative
 versions and restore history; it must not silently reuse session approval or auto-run work.
 
 Documentation review reconciles the original MVP exclusion with owner-authorized Task013
-and ADR 0005, documents backend-origin review paths (development port 8765 or explicit
+and ADR 0006, documents backend-origin review paths (development port 8765 or explicit
 standalone port 8000), operation-specific payloads and structured/safe protocol results.
 Local validation and required code review completed; pull request CI passed on implementation head `a151729`.
 
@@ -78,7 +78,7 @@ The owner subsequently reported an initial Task008 implementation on
 contracts and project-history guide have been inspected. This branch is the docking
 target; MCP project tools and durable request binding remain reserved. Task013 must
 preserve the saved-project store, revision conflicts, trusted media registration and
-explicit restart recovery. ADR 0005 records MCP; ADR 0004 belongs to Task008 persistence.
+explicit restart recovery. ADR 0006 records MCP; ADR 0004 belongs to Task008 persistence.
 
 The MCP branch is based on the supplied Task008 initial commit `902bb3a`. Existing
 project storage/restore remains supported; only MCP binding is deferred. This task
@@ -127,4 +127,17 @@ The only rebase conflict was the task directory rename; the task remains in revi
 - No real media generation, paid provider request, credential change or main merge.
 - Spike helpers: 11 passed; shell syntax and diff checks passed.
 - Locked offline dependency sync and live official SDK loopback smoke passed.
-- New PR CI and focused backend integration review will be recorded before delivery.
+- PR #18 targets main; all three CI checks passed on `a786237` (run `37220385412`).
+- Focused GPT-6 Luna/max backend integration review identified the Task014 image-cleanup
+  marker bypass. Listing now filters marked images; shared video submission rechecks
+  markers after claiming the cleanup/media gate, so stale approvals cannot render them.
+  The fix passed focused re-review with no remaining Blocker/Required findings;
+  frontend/tests excluded from code review. Final regression validation is recorded below.
+- MCP ADR renumbered to 0006 because merged Task014 owns ADR0005.
+
+Final local validation after the cleanup compatibility fix: backend 230 passed, one
+existing skip; Ruff lint/format and diff checks passed. The added official-SDK regression
+confirms that a partially deleted image stays hidden and a previously approved video
+request fails with 409 without calling the renderer, releasing the shared gate. Live
+loopback SDK smoke passed after the production fix. Frontend/spike results above remain
+applicable because those files are unchanged. PR #18 carries the final CI merge gate.

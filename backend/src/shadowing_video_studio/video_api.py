@@ -7,6 +7,7 @@ from fastapi.responses import FileResponse
 
 from shadowing_video_studio.application_commands import submit_video
 from shadowing_video_studio.generation_requests import VideoJobRequest
+from shadowing_video_studio.project_store import ProjectStore
 from shadowing_video_studio.speech import SpeechError
 from shadowing_video_studio.speech_api import get_speech_service, verify_local_request
 from shadowing_video_studio.speech_jobs import SpeechJobs
@@ -17,8 +18,14 @@ from shadowing_video_studio.visual_assets import VisualLibrary
 router = APIRouter(prefix="/api/video", dependencies=[Depends(verify_local_request)])
 
 
-def create_video_service(speech: SpeechJobs, visuals: VisualLibrary | None = None) -> VideoJobs:
-    return VideoJobs(VideoSettings.from_environment(), speech, visuals=visuals)
+def create_video_service(
+    speech: SpeechJobs,
+    visuals: VisualLibrary | None = None,
+    project_store: ProjectStore | None = None,
+) -> VideoJobs:
+    return VideoJobs(
+        VideoSettings.from_environment(), speech, visuals=visuals, project_store=project_store
+    )
 
 
 def get_video_service(request: Request) -> VideoJobs:
@@ -26,6 +33,7 @@ def get_video_service(request: Request) -> VideoJobs:
         request.app.state.video = create_video_service(
             get_speech_service(request),
             getattr(getattr(request.app.state, "visuals", None), "library", None),
+            getattr(getattr(request.app.state, "projects", None), "store", None),
         )
     return request.app.state.video
 

@@ -24,7 +24,9 @@ Proposals must be reviewed as sentences before speech. Video approval requires l
 to the exact audio references and inspecting selected background/illustration previews
 displayed by the local review page. Speech payload `force`
 is allowed only with one sentence for regeneration. Video payload uses sentence/audio IDs
-and optional existing background/illustration IDs; never filesystem paths.
+and optional existing background/illustration IDs; never filesystem paths. Images already
+marked for cleanup are excluded from discovery and rejected at video submission even
+when a partial filesystem deletion leaves their bytes readable.
 
 ## Session workflow
 

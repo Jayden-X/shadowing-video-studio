@@ -1,4 +1,4 @@
-# ADR 0005 — Local MCP control in the existing application process
+# ADR 0006 — Local MCP control in the existing application process
 
 ## Status
 

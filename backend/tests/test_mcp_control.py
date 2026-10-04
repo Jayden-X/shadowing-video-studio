@@ -2,6 +2,7 @@ import asyncio
 import json
 import re
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import httpx
 from fastapi import FastAPI
@@ -13,6 +14,7 @@ from test_projects import sentence as project_sentence
 from test_projects import snapshot as project_snapshot
 from test_projects import speech_request as project_speech_request
 from test_speech_jobs import FakeSpeech
+from test_visual_assets import FakeProbe, png
 
 from shadowing_video_studio.control import ApplicationControl
 from shadowing_video_studio.control_api import router as control_router
@@ -24,6 +26,9 @@ from shadowing_video_studio.mcp_control import (
 from shadowing_video_studio.speech import VOICE, HeavyJobGate, SpeechSentence
 from shadowing_video_studio.speech_assets import SpeechAssets
 from shadowing_video_studio.speech_jobs import SpeechJobs
+from shadowing_video_studio.visual_api import VisualService
+from shadowing_video_studio.visual_assets import VisualLibrary
+from shadowing_video_studio.visual_cleanup import VisualCleanup
 
 READ_TOKEN = "read-token-for-local-mcp-tests-123456789"
 EXECUTE_TOKEN = "execute-token-for-local-mcp-tests-123456789"
@@ -420,5 +425,103 @@ def test_mcp_transient_speech_uses_project_store_assets_without_binding_saved_pr
         await application.state.control.close()
         await speech.close()
         await project_services.video.close()
+
+    asyncio.run(scenario())
+
+
+def test_mcp_hides_confirmed_visual_tombstone_and_rejects_stale_approved_video(
+    tmp_path, monkeypatch
+):
+    async def scenario():
+        services = ProjectServices(tmp_path)
+        services.video.project_store = services.store
+        library = VisualLibrary(tmp_path, FakeProbe())
+        services.video.visuals = library
+        visual = await library.import_asset("illustration", "stale.png", png())
+        sentence = SpeechSentence("sentence-001", "A reviewed sentence with an image.")
+        speech_job = await services.speech.submit([sentence])
+        await services.speech.wait()
+        audio_id = services.speech.get(speech_job["id"])["sentences"][0]["assetId"]
+
+        application, speech = make_app(tmp_path, project_services=services)
+        application.state.visuals = VisualService(library)
+        cleanup = VisualCleanup(services.store, speech.gate, library)
+        image_sidecar = visual.path.parent / "asset.json"
+        try:
+            mcp = application.state.mcp
+            async with mcp.session_manager.run():
+                async with mcp_session(application, EXECUTE_TOKEN) as client:
+                    requested = await client.call_tool(
+                        "request_generation",
+                        {
+                            "request": {
+                                "requestId": "stale-approved-video",
+                                "operation": "video",
+                                "payload": {
+                                    "sentences": [
+                                        {
+                                            "id": sentence.id,
+                                            "text": sentence.text,
+                                            "assetId": audio_id,
+                                            "illustrationAssetId": visual.id,
+                                        }
+                                    ]
+                                },
+                            }
+                        },
+                    )
+                    assert not requested.isError
+                    request = result_data(requested)
+
+                    async with httpx.AsyncClient(
+                        transport=httpx.ASGITransport(app=application),
+                        base_url="http://127.0.0.1:8000",
+                    ) as browser:
+                        review_page = await browser.get(request["reviewPath"])
+                        nonce_match = re.search(
+                            r'name="nonce" value="([A-Za-z0-9_-]+)"', review_page.text
+                        )
+                        assert review_page.status_code == 200 and nonce_match
+                        approved = await browser.post(
+                            f"{request['reviewPath']}/decision",
+                            data={"nonce": nonce_match.group(1), "decision": "approve"},
+                        )
+                        assert approved.status_code == 303
+
+                    cleanup_plan = await cleanup.preview(visual.id)
+                    original_unlink = Path.unlink
+
+                    def leave_confirmed_image_files(path, *args, **kwargs):
+                        if path in {visual.path, image_sidecar}:
+                            raise PermissionError("Keep synthetic image files for regression test.")
+                        return original_unlink(path, *args, **kwargs)
+
+                    with monkeypatch.context() as patcher:
+                        patcher.setattr(Path, "unlink", leave_confirmed_image_files)
+                        outcome = await cleanup.execute(visual.id, cleanup_plan["planToken"])
+
+                    assert outcome["status"] == "partial"
+                    assert visual.path.is_file() and image_sidecar.is_file()
+                    assert visual.id in services.store.hidden_visual_ids()
+                    assert any(item["id"] == visual.id for item in library.list_assets())
+
+                    listed = await client.call_tool("list_visual_assets", {})
+                    assert not listed.isError
+                    assert visual.id not in {item["id"] for item in result_data(listed)["assets"]}
+
+                    executed = await client.call_tool(
+                        "execute_request", {"request_id": request["requestId"]}
+                    )
+                    assert executed.isError
+                    result = result_data(executed)
+                    assert result["state"] == "failed"
+                    assert result["error"]["statusCode"] == 409
+                    assert "removed from the library" in result["error"]["detail"]
+                    assert not services.renderer.calls
+                    assert not speech.gate.busy
+        finally:
+            await application.state.control.close()
+            await services.video.close()
+            await speech.close()
 
     asyncio.run(scenario())

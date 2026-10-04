@@ -115,7 +115,7 @@ Keep diagnostic events behind an application observability boundary. Task/run/co
 
 The original MVP remains the baseline, with one video at a time and no scheduler.
 Task013 adds explicitly authorized local MCP control after MVP; see
-[ADR0005](decisions/0005-local-mcp-control.md) and [its contracts](../development/mcp-control.md).
+[ADR0006](decisions/0006-local-mcp-control.md) and [its contracts](../development/mcp-control.md).
 MCP project binding/editor synchronization remains a follow-up against Task008. See [future task and control seams](future-task-control.md) for the reserved boundaries and decisions that remain open.
 
 ## Extension seams
