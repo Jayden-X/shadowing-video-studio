@@ -47,6 +47,7 @@ class SpeechAssets:
         self._assets: dict[str, SpeechAsset] = {}
         self._cache: dict[tuple[str, str, str], str] = {}
         self._bytes = 0
+        self._charges: dict[str, int] = {}
 
     def _session(self) -> Path:
         if self._directory is None:
@@ -87,7 +88,17 @@ class SpeechAssets:
         # Reserve the maximum even on failure. Failed/partial files are preserved
         # and must not bypass the session's disk ceiling through repeated retries.
         self._bytes += MAX_WAV_BYTES
+        self._charges[asset_id] = MAX_WAV_BYTES
         return asset_id, destination
+
+    def release_deleted(self, files: list[dict]) -> None:
+        """Release this session's reservations only after explicit journaled cleanup."""
+        if self._directory is None:
+            return
+        for item in files:
+            path = self.workspace / item["path"]
+            if path.parent == self._directory and path.suffix == ".wav":
+                self._bytes -= self._charges.pop(path.stem, 0)
 
     def _read_file(self, path: Path, *, registered: bool = False) -> bytes:
         directory = path.parent if registered else self._session()
@@ -162,6 +173,7 @@ class SpeechAssets:
         self._assets[asset_id] = asset
         self._cache[(sentence.id, sentence.text, fingerprint)] = asset_id
         self._bytes -= MAX_WAV_BYTES - len(content)
+        self._charges[asset_id] = len(content)
         return asset
 
     def _load(self, asset_id: str) -> SpeechAsset:

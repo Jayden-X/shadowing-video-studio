@@ -35,6 +35,10 @@ function mockSpeech(create: (snapshot: Snapshot, force: boolean, init: RequestIn
     if (url === "/api/speech/status") return json({ available: true, reason: null, voice: "Aiden", model: "Qwen3-TTS-12Hz-0.6B-CustomVoice", backend: "cpu" });
     if (url === "/api/speech/capabilities") return json(capabilityResponse);
     if (url === "/api/video/status") return json({ available: true, reason: null });
+    if (url === "/api/visuals/status") return json({ available: true, reason: null, maxUploadBytes: 10 * 1024 * 1024,
+      formats: ["image/png", "image/jpeg", "image/webp"] });
+    if (url === "/api/visuals/assets") return json({ assets: [] });
+    if (url === "/api/visuals/cleanup/operations") return json({ operations: [] });
     if (url === "/api/text/providers") return json({ providers: ["codex", "deepseek"].map((id) => ({ id, label: id, available: false, reason: "unavailable" })) });
     const projectSpeech = await projectServer.submitSpeech(url, init, create);
     if (projectSpeech) return projectSpeech;

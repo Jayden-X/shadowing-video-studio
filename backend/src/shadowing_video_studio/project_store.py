@@ -14,7 +14,7 @@ import stat
 import threading
 import uuid
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -350,13 +350,34 @@ class ProjectStore:
             except FileExistsError:
                 pass
             self.database.chmod(0o600)
-            with self._transaction(write=True, initialize=created) as connection:
+            if not created:
+                self._backup_before_migration()
+            with self._transaction(write=True, initialize=created, migrate=True) as connection:
                 if created:
                     for statement in SCHEMA:
                         connection.execute(statement)
                     connection.execute("PRAGMA user_version = 1")
+                if connection.execute("PRAGMA user_version").fetchone()[0] == 1:
+                    connection.execute("ALTER TABLE projects ADD COLUMN deleted_at TEXT")
+                    connection.execute("ALTER TABLE projects ADD COLUMN cleanup_token TEXT")
+                    connection.execute(
+                        "CREATE TABLE cleanups (token TEXT PRIMARY KEY, project_id TEXT NOT NULL "
+                        "REFERENCES projects(id), mode TEXT NOT NULL, status TEXT NOT NULL, "
+                        "plan TEXT NOT NULL, result TEXT, created_at TEXT NOT NULL)"
+                    )
+                    connection.execute(
+                        "CREATE TABLE owned_speech (path TEXT PRIMARY KEY, "
+                        "project_id TEXT NOT NULL "
+                        "REFERENCES projects(id), attempt_id TEXT NOT NULL REFERENCES attempts(id))"
+                    )
+                    connection.execute("PRAGMA user_version = 2")
+                connection.execute(
+                    "CREATE TABLE IF NOT EXISTS visual_cleanups (token TEXT PRIMARY KEY, "
+                    "asset_id TEXT NOT NULL, status TEXT NOT NULL, plan TEXT NOT NULL, "
+                    "result TEXT, created_at TEXT NOT NULL)"
+                )
                 self._interrupt(connection)
-        except OSError as exc:
+        except (OSError, sqlite3.Error) as exc:
             raise ProjectError("Could not open private local project storage.", 503) from exc
 
     def _check_paths(self) -> None:
@@ -371,6 +392,7 @@ class ProjectStore:
             raise ProjectError("The private project-state directory is unsafe.", 503)
         for path in (
             self.database,
+            self.directory / "projects-v1-backup.sqlite3",
             Path(f"{self.database}-journal"),
             Path(f"{self.database}-wal"),
             Path(f"{self.database}-shm"),
@@ -381,9 +403,37 @@ class ProjectStore:
             ):
                 raise ProjectError("The project database or journal is unsafe.", 503)
 
+    def _backup_before_migration(self) -> None:
+        """Keep a private consistent v1 backup, without replacing any existing backup."""
+        with closing(sqlite3.connect(self.database)) as source:
+            if source.execute("PRAGMA user_version").fetchone()[0] != 1:
+                return
+            backup = self.directory / "projects-v1-backup.sqlite3"
+            try:
+                descriptor = os.open(
+                    backup,
+                    os.O_RDWR | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+                    0o600,
+                )
+                os.close(descriptor)
+            except FileExistsError:
+                with closing(sqlite3.connect(f"{backup.as_uri()}?mode=ro", uri=True)) as existing:
+                    if existing.execute("PRAGMA user_version").fetchone()[0] != 1:
+                        raise ProjectError(
+                            "Existing migration backup is unsupported; preserve it.", 503
+                        ) from None
+                return
+            with closing(sqlite3.connect(backup)) as destination:
+                source.backup(destination)
+            descriptor = os.open(backup, os.O_RDWR)
+            try:
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+
     @contextmanager
     def _transaction(
-        self, *, write: bool = False, initialize: bool = False
+        self, *, write: bool = False, initialize: bool = False, migrate: bool = False
     ) -> Iterator[sqlite3.Connection]:
         with self._lock:
             connection = None
@@ -392,7 +442,7 @@ class ProjectStore:
                 connection = sqlite3.connect(self.database, timeout=2, isolation_level=None)
                 connection.row_factory = sqlite3.Row
                 version = connection.execute("PRAGMA user_version").fetchone()[0]
-                if not initialize and version != 1:
+                if not initialize and version != 2 and not (migrate and version == 1):
                     raise ProjectError(
                         "This project database schema is unsupported; keep the file.", 503
                     )
@@ -437,7 +487,9 @@ class ProjectStore:
 
     @staticmethod
     def _project_row(connection: sqlite3.Connection, project_id: str) -> sqlite3.Row:
-        row = connection.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
+        row = connection.execute(
+            "SELECT * FROM projects WHERE id = ? AND deleted_at IS NULL", (project_id,)
+        ).fetchone()
         if row is None:
             raise ProjectError("Saved project not found. Keep the current draft.", 404)
         return row
@@ -450,7 +502,7 @@ class ProjectStore:
     def list_projects(self) -> list[dict]:
         with self._transaction() as connection:
             rows = connection.execute(
-                "SELECT * FROM projects ORDER BY updated_at DESC, id"
+                "SELECT * FROM projects WHERE deleted_at IS NULL ORDER BY updated_at DESC, id"
             ).fetchall()
             # Listing remains possible when one project's editor payload is damaged.
             return [
@@ -475,9 +527,11 @@ class ProjectStore:
         if result.keys() != {"id", "name", "revision", "snapshot", "createdAt", "updatedAt"}:
             raise ProjectError("The saved operation receipt is invalid.", 503)
         _token(result["id"])
+        ProjectStore._project_row(connection, result["id"])
         validate_name(result["name"])
         _integer(result["revision"], 1)
         validate_snapshot(result["snapshot"])
+        ProjectStore._check_visual_choices(connection, result["snapshot"])
         _timestamp(result["createdAt"])
         _timestamp(result["updatedAt"])
         return result
@@ -491,13 +545,15 @@ class ProjectStore:
         _token(operation_token)
         digest = self._digest({"name": name, "snapshot": snapshot})
         with self._transaction(write=True) as connection:
+            self._check_visual_choices(connection, snapshot)
             if result := self._receipt(connection, operation_token, "create", digest):
                 return result
             self._capacity(connection, "projects", MAX_PROJECTS)
             self._capacity(connection, "receipts", MAX_RECEIPTS)
             project_id, timestamp = uuid.uuid4().hex, _now()
             connection.execute(
-                "INSERT INTO projects VALUES (?, ?, 1, ?, ?, ?)",
+                "INSERT INTO projects (id,name,revision,snapshot,created_at,updated_at) "
+                "VALUES (?, ?, 1, ?, ?, ?)",
                 (project_id, name, _encode(snapshot), timestamp, timestamp),
             )
             result = self._project(self._project_row(connection, project_id))
@@ -515,6 +571,7 @@ class ProjectStore:
         snapshot: dict,
         expected_revision: int,
     ) -> dict:
+        self._check_visual_choices(connection, snapshot)
         current = self._project(self._project_row(connection, project_id))
         if current["revision"] != expected_revision:
             raise ProjectError(
@@ -654,6 +711,7 @@ class ProjectStore:
             }
         )
         with self._transaction(write=True) as connection:
+            self._project_row(connection, project_id)
             row = connection.execute(
                 "SELECT * FROM attempts WHERE project_id = ? AND submission_token = ?",
                 (project_id, submission_token),
@@ -1020,3 +1078,300 @@ class ProjectStore:
                     except ProjectError:
                         continue
             return result
+
+    def own_speech(self, project_id: str, attempt_id: str, relative_path: str) -> None:
+        """Record an allocated destination before writing, including failed generation."""
+        _token(project_id)
+        _token(attempt_id)
+        if not re.fullmatch(r"speech/[0-9a-f]{32}/[0-9a-f]{32}\.wav", relative_path):
+            raise ProjectError("Invalid owned speech destination.")
+        with self._transaction(write=True) as connection:
+            self._project_row(connection, project_id)
+            attempt = self._attempt(self._attempt_row(connection, attempt_id), include_job=False)
+            if attempt["projectId"] != project_id or attempt["kind"] != "speech":
+                raise ProjectError("Speech ownership must match its attempt.", 409)
+            connection.execute(
+                "INSERT INTO owned_speech VALUES (?, ?, ?)",
+                (relative_path, project_id, attempt_id),
+            )
+
+    def cleanup_records(self, project_id: str) -> dict:
+        _token(project_id)
+        with self._transaction() as connection:
+            row = connection.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
+            if row is None:
+                raise ProjectError("Project not found.", 404)
+            result = {
+                "id": project_id,
+                "name": validate_name(row["name"]),
+                "revision": _integer(row["revision"], 1),
+                "deletedAt": row["deleted_at"],
+                "cleanupToken": row["cleanup_token"],
+                "audio": [],
+                "videos": [],
+                "attempts": [],
+                "ownedSpeech": [],
+                "warnings": [],
+            }
+            for table, field, parser in (
+                ("speech_assets", "audio", self._speech),
+                ("video_outputs", "videos", self._video),
+            ):
+                for asset in connection.execute(
+                    f"SELECT * FROM {table} WHERE project_id=?", (project_id,)
+                ).fetchall():
+                    try:
+                        result[field].append(parser(connection, asset))
+                    except ProjectError:
+                        result["warnings"].append("An untrusted media registration is preserved.")
+            for attempt in connection.execute(
+                "SELECT * FROM attempts WHERE project_id=?", (project_id,)
+            ).fetchall():
+                try:
+                    result["attempts"].append(self._attempt(attempt, include_job=False))
+                except ProjectError:
+                    # Even a damaged active record must block destructive cleanup.
+                    if attempt["status"] in {"accepted", "running"}:
+                        raise ProjectError(
+                            "Unfinished project work must be resolved first.", 409
+                        ) from None
+                    result["warnings"].append("An untrusted attempt's files are preserved.")
+            result["ownedSpeech"] = [
+                r[0]
+                for r in connection.execute(
+                    "SELECT path FROM owned_speech WHERE project_id=?", (project_id,)
+                )
+            ]
+            result["foreignSpeech"] = [
+                r[0]
+                for r in connection.execute(
+                    "SELECT path FROM owned_speech WHERE project_id<>?", (project_id,)
+                )
+            ]
+            for other in connection.execute(
+                "SELECT payload FROM speech_assets WHERE project_id<>?", (project_id,)
+            ):
+                try:
+                    asset = self._media(_decode(other[0]), "speech")
+                    result["foreignSpeech"].append(f"speech/{asset['sessionId']}/{asset['id']}.wav")
+                except ProjectError:
+                    raise ProjectError(
+                        "Resolve damaged shared-resource metadata before cleanup.", 409
+                    ) from None
+            return result
+
+    def save_cleanup_plan(self, token: str, project_id: str, mode: str, plan: dict) -> None:
+        _token(token)
+        with self._transaction(write=True) as connection:
+            self._project_row(connection, project_id)
+            self._capacity(connection, "cleanups", 10_000)
+            connection.execute(
+                "INSERT INTO cleanups VALUES (?, ?, ?, 'planned', ?, NULL, ?)",
+                (token, project_id, mode, _encode(plan), _now()),
+            )
+
+    def cleanup_operation(self, project_id: str, token: str) -> dict:
+        _token(token)
+        _token(project_id)
+        with self._transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM cleanups WHERE token=? AND project_id=?", (token, project_id)
+            ).fetchone()
+            if row is None:
+                raise ProjectError("Cleanup plan not found. Preview deletion first.", 404)
+            return {
+                "status": row["status"],
+                "mode": row["mode"],
+                "plan": _decode(row["plan"]),
+                "result": _decode(row["result"]) if row["result"] else None,
+            }
+
+    def begin_cleanup(self, project_id: str, token: str, revision: int, result: dict) -> None:
+        with self._transaction(write=True) as connection:
+            current = self._project(self._project_row(connection, project_id))
+            if current["revision"] != revision:
+                raise ProjectError("Project changed. Preview deletion again.", 409)
+            if connection.execute(
+                "SELECT 1 FROM attempts WHERE project_id=? AND status IN ('accepted','running')",
+                (project_id,),
+            ).fetchone():
+                raise ProjectError("Wait for project generation to finish before deleting.", 409)
+            connection.execute(
+                "UPDATE projects SET deleted_at=?,cleanup_token=?,snapshot='{}' WHERE id=?",
+                (_now(), token, project_id),
+            )
+            # Receipts must never replay an archived editor or recreate the project.
+            for receipt in connection.execute("SELECT token,result FROM receipts").fetchall():
+                try:
+                    related = _decode(receipt["result"]).get("id") == project_id
+                except ProjectError:
+                    continue
+                if related:
+                    connection.execute(
+                        "UPDATE receipts SET kind='deleted',result=? WHERE token=?",
+                        (_encode({"id": project_id}), receipt["token"]),
+                    )
+            connection.execute(
+                "UPDATE cleanups SET status='pending',result=? WHERE token=? AND project_id=?",
+                (_encode(result), token, project_id),
+            )
+
+    def update_cleanup(self, project_id: str, token: str, result: dict) -> None:
+        with self._transaction(write=True) as connection:
+            operation = connection.execute(
+                "SELECT mode FROM cleanups WHERE token=? AND project_id=?", (token, project_id)
+            ).fetchone()
+            if operation is None:
+                raise ProjectError("Cleanup operation not found.", 404)
+            if result["status"] == "completed" and operation["mode"] == "all":
+                # All retained outputs are gone. Keep only the deletion receipt and
+                # minimal project tombstone, rather than private generation snapshots.
+                for table in ("speech_assets", "video_outputs", "owned_speech", "attempts"):
+                    connection.execute(f"DELETE FROM {table} WHERE project_id=?", (project_id,))
+            connection.execute(
+                "UPDATE cleanups SET status=?,result=? WHERE token=? AND project_id=?",
+                (result["status"], _encode(result), token, project_id),
+            )
+
+    @staticmethod
+    def _visual_ids(snapshot: dict) -> set[str]:
+        editor = validate_snapshot(snapshot)
+        return {
+            value
+            for value in (editor["backgroundAssetId"], *editor["illustrationsBySentence"].values())
+            if value is not None
+        }
+
+    @staticmethod
+    def _check_visual_choices(connection: sqlite3.Connection, snapshot: dict) -> None:
+        choices = ProjectStore._visual_ids(snapshot)
+        for row in connection.execute(
+            "SELECT asset_id FROM visual_cleanups WHERE status != 'planned'"
+        ):
+            if row["asset_id"] in choices:
+                raise ProjectError(
+                    "This image was removed from the library. Select another image.", 409
+                )
+
+    @staticmethod
+    def _check_visual_references(connection: sqlite3.Connection, asset_id: str) -> None:
+        # Frozen attempts remain authoritative even after the editor is archived.
+        # Damaged snapshots fail closed rather than guessing that an image is unused.
+        active, historical = set(), set()
+        for row in connection.execute(
+            "SELECT name,snapshot FROM projects WHERE deleted_at IS NULL"
+        ):
+            if asset_id in ProjectStore._visual_ids(_decode(row["snapshot"], MAX_SNAPSHOT_BYTES)):
+                active.add(validate_name(row["name"]))
+        for row in connection.execute("SELECT * FROM attempts"):
+            attempt = ProjectStore._attempt(row, include_job=False)
+            if asset_id in ProjectStore._visual_ids(attempt["snapshot"]["editor"]):
+                project = connection.execute(
+                    "SELECT name FROM projects WHERE id=?", (attempt["projectId"],)
+                ).fetchone()
+                if project is None:
+                    raise ProjectError("Image reference metadata is unavailable.", 503)
+                historical.add(validate_name(project["name"]))
+        if active or historical:
+            parts = ["This image is in use."]
+            for label, names in (("Current projects", active), ("Generation history", historical)):
+                if names:
+                    shown = sorted(names)[:10]
+                    summary = ", ".join(f"“{name}”" for name in shown)
+                    if len(names) > len(shown):
+                        summary += f" and {len(names) - len(shown)} more"
+                    parts.append(f"{label}: {summary}.")
+            parts.append(
+                "Remove current selections and unwanted history before deleting this image."
+            )
+            raise ProjectError(" ".join(parts), 409)
+
+    def visual_unused(self, asset_id: str) -> None:
+        _token(asset_id)
+        with self._transaction() as connection:
+            self._check_visual_references(connection, asset_id)
+            if connection.execute(
+                "SELECT 1 FROM visual_cleanups WHERE asset_id=? AND status!='planned'",
+                (asset_id,),
+            ).fetchone():
+                raise ProjectError(
+                    "This image already has a confirmed cleanup. Retry that operation.", 409
+                )
+
+    def hidden_visual_ids(self) -> set[str]:
+        with self._transaction() as connection:
+            return {
+                r[0]
+                for r in connection.execute(
+                    "SELECT asset_id FROM visual_cleanups WHERE status!='planned'"
+                )
+            }
+
+    def unfinished_visual_cleanups(self) -> list[dict]:
+        with self._transaction() as connection:
+            return [
+                {k: v for k, v in _decode(row["result"]).items() if k != "donePaths"}
+                for row in connection.execute(
+                    "SELECT result FROM visual_cleanups WHERE status IN ('pending','partial') "
+                    "ORDER BY created_at"
+                )
+            ]
+
+    def save_visual_cleanup(self, token: str, asset_id: str, plan: dict) -> None:
+        _token(token), _token(asset_id)
+        with self._transaction(write=True) as connection:
+            self._capacity(connection, "visual_cleanups", 10_000)
+            connection.execute(
+                "INSERT INTO visual_cleanups VALUES (?,?,'planned',?,NULL,?)",
+                (token, asset_id, _encode(plan), _now()),
+            )
+
+    def visual_cleanup_operation(self, asset_id: str, token: str) -> dict:
+        _token(asset_id), _token(token)
+        with self._transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM visual_cleanups WHERE token=? AND asset_id=?", (token, asset_id)
+            ).fetchone()
+            if row is None:
+                raise ProjectError("Image cleanup operation not found.", 404)
+            return {
+                "status": row["status"],
+                "plan": _decode(row["plan"]),
+                "result": _decode(row["result"]) if row["result"] else None,
+            }
+
+    def update_visual_cleanup(
+        self, asset_id: str, token: str, result: dict, *, begin: bool = False
+    ) -> None:
+        _token(asset_id), _token(token)
+        with self._transaction(write=True) as connection:
+            row = connection.execute(
+                "SELECT * FROM visual_cleanups WHERE token=? AND asset_id=?", (token, asset_id)
+            ).fetchone()
+            if row is None:
+                raise ProjectError("Image cleanup operation not found.", 404)
+            if begin:
+                self._check_visual_references(connection, asset_id)
+                if connection.execute(
+                    "SELECT 1 FROM visual_cleanups "
+                    "WHERE asset_id=? AND token!=? AND status!='planned'",
+                    (asset_id, token),
+                ).fetchone():
+                    raise ProjectError("Another operation owns this image's deletion.", 409)
+                if row["status"] != "planned":
+                    raise ProjectError("Image cleanup has already been confirmed.", 409)
+            elif row["status"] == "planned":
+                raise ProjectError("Image cleanup has not been confirmed.", 409)
+            connection.execute(
+                "UPDATE visual_cleanups SET status=?,result=? WHERE token=?",
+                (result["status"], _encode(result), token),
+            )
+
+    def retained_ids(self) -> list[str]:
+        with self._transaction() as connection:
+            return [
+                r[0]
+                for r in connection.execute(
+                    "SELECT id FROM projects WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC"
+                )
+            ]

@@ -415,6 +415,63 @@ class VisualLibrary:
     def read(self, asset_id: str, kind: str | None = None) -> bytes:
         return self._verified_content(self.get(asset_id, kind))
 
+    def rename(self, asset_id: str, name: str, expected_name: str) -> VisualAsset:
+        """Change display metadata without changing immutable image IDs or bytes."""
+        name = _display_name(name)
+        asset = self.get(asset_id)
+        if asset.name != expected_name:
+            raise VisualAssetError(
+                "The image name changed. Refresh the library and try again.", 409
+            )
+        if name == asset.name:
+            return asset
+        record_path = asset.path.parent / "asset.json"
+        if record_path.stat().st_nlink != 1:
+            raise VisualAssetError("Linked image metadata cannot be renamed.", 409)
+        original = self._read_owned(record_path, MAX_RECORD_BYTES)
+        record = json.loads(original, object_pairs_hook=_strict_object)
+        expected = {
+            "version": 1,
+            "id": asset.id,
+            "kind": asset.kind,
+            "name": expected_name,
+            "mimeType": asset.mime_type,
+            "width": asset.width,
+            "height": asset.height,
+            "sizeBytes": asset.size_bytes,
+            "sha256": asset.sha256,
+        }
+        if record != expected:
+            raise VisualAssetError("Image metadata changed. Refresh before renaming.", 409)
+        record["name"] = name
+        encoded = json.dumps(record, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        if len(encoded) > MAX_RECORD_BYTES:
+            raise VisualAssetError("The image metadata exceeded its limit.")
+        temporary = asset.path.parent / ("rename-" + uuid.uuid4().hex + ".tmp")
+        try:
+            descriptor = os.open(
+                temporary,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+                0o600,
+            )
+            with os.fdopen(descriptor, "wb") as handle:
+                handle.write(encoded)
+                handle.flush()
+                os.fsync(handle.fileno())
+            if (
+                _unsafe(record_path)
+                or record_path.stat().st_nlink != 1
+                or self._read_owned(record_path, MAX_RECORD_BYTES) != original
+            ):
+                raise VisualAssetError("Image metadata changed. Refresh before renaming.", 409)
+            os.replace(temporary, record_path)
+            return self.get(asset_id)
+        except OSError as exc:
+            raise VisualAssetError("Could not rename this image. Refresh and retry.", 503) from exc
+        finally:
+            if temporary.exists() and not _unsafe(temporary):
+                temporary.unlink()
+
     def _allocate(self, kind: str, mime: str, content: bytes) -> tuple[str, Path]:
         directories = self._record_directories()
         used = self._storage_used(directories)

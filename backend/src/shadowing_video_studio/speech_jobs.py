@@ -224,6 +224,13 @@ class SpeechJobs:
                 row["status"] = "generating"
                 try:
                     asset_id, destination = self.assets.allocate()
+                    if project:
+                        await asyncio.to_thread(
+                            project.store.own_speech,
+                            project.project_id,
+                            job["id"],
+                            destination.relative_to(self.assets.workspace).as_posix(),
+                        )
                     await self.provider.generate(row["text"], destination, voice)
                     asset = await asyncio.to_thread(
                         self.assets.register,
@@ -310,6 +317,11 @@ class SpeechJobs:
         if not OPAQUE_ID.fullmatch(job_id):
             raise SpeechError("Speech job not found in this service session.", 404)
         if job_id in self._jobs:
+            if self._jobs[job_id].get("projectId") and self.assets and self.assets.store:
+                try:
+                    self.assets.store.get_attempt(job_id)
+                except ProjectError as exc:
+                    raise SpeechError(exc.detail, exc.status_code) from exc
             return deepcopy(self._jobs[job_id])
         store = self.assets.store if self.assets else None
         if store:

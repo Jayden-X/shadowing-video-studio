@@ -19,6 +19,23 @@ export type VisualAsset = {
   available: boolean;
   reason: string | null;
 };
+export type VisualCleanupPreview = {
+  assetId: string;
+  name: string;
+  planToken: string;
+  deleteFiles: { count: number; bytes: number };
+  warnings: string[];
+};
+export type VisualCleanupResult = {
+  assetId: string;
+  name: string;
+  operationToken: string;
+  status: "completed" | "partial" | "pending";
+  deletedFiles: number;
+  failedFiles: number;
+  warnings: string[];
+  error?: string | null;
+};
 
 export class VisualApiError extends Error {
   constructor(message: string, readonly status?: number) { super(message); }
@@ -85,6 +102,45 @@ async function requestJson(url: string, init: RequestInit): Promise<unknown> {
   }
 }
 
+async function cleanupRequestJson(url: string, init: RequestInit): Promise<unknown> {
+  const isMutation = url.endsWith("/cleanup") && init.method === "POST";
+  let response: Response;
+  try {
+    response = await fetch(url, init);
+  } catch {
+    if (init.signal?.aborted) throw new DOMException("Stopped waiting for image cleanup.", "AbortError");
+    throw new VisualApiError(isMutation
+      ? "The image cleanup result could not be confirmed. Check cleanup status, then explicitly retry the same token."
+      : "The local image library could not confirm cleanup. Refresh it and try again.");
+  }
+  if (!response.ok) {
+    if (response.status === 409) {
+      let detail = "This image is still referenced by a project or local media work. Resolve the reference or wait, then refresh the preview.";
+      try {
+        const value: unknown = await response.json();
+        if (isRecord(value) && isSafeText(value.detail, 500) && value.detail.trim()) detail = value.detail;
+      } catch { /* Use the safe local explanation when the response body is invalid. */ }
+      throw new VisualApiError(detail, response.status);
+    }
+    if (response.status === 404) throw new VisualApiError("This image or cleanup operation is no longer available. Refresh the image library.", response.status);
+    if (response.status === 429) throw new VisualApiError("The local service is busy. Wait for current media work to finish, then retry cleanup.", response.status);
+    if (response.status === 503) throw new VisualApiError(isMutation
+      ? "The image cleanup result could not be confirmed. Check cleanup status, then explicitly retry the same token."
+      : "Image cleanup is unavailable in the local service. Refresh the library and retry.", response.status);
+    throw new VisualApiError(isMutation
+      ? "The image cleanup result could not be confirmed. Check cleanup status, then explicitly retry the same token."
+      : "The image cleanup request failed. Refresh the library and retry.", response.status);
+  }
+  try {
+    return await response.json();
+  } catch {
+    if (init.signal?.aborted) throw new DOMException("Stopped waiting for image cleanup.", "AbortError");
+    throw new VisualApiError(isMutation
+      ? "The image cleanup result could not be confirmed. Check cleanup status, then explicitly retry the same token."
+      : "The local service returned invalid image cleanup data.");
+  }
+}
+
 export async function getVisualStatus(signal?: AbortSignal): Promise<VisualStatus> {
   const value = await requestJson("/api/visuals/status", { signal });
   if (!isRecord(value) || !hasExactKeys(value, ["available", "reason", "maxUploadBytes", "formats"])
@@ -136,6 +192,41 @@ export async function getVisualAssets(signal?: AbortSignal): Promise<VisualAsset
   return assets as VisualAsset[];
 }
 
+export async function renameVisualAsset(assetId: string, name: string, expectedName: string): Promise<VisualAsset> {
+  const nextName = name.trim();
+  if (!opaqueId.test(assetId) || !nextName || nextName.length > 160 || !isWellFormedText(nextName)
+    || !isSafeText(expectedName, 255) || !expectedName.trim()) {
+    throw new VisualApiError("Enter an image name between 1 and 160 characters.");
+  }
+  let response: Response;
+  try {
+    response = await fetch(`/api/visuals/assets/${assetId}`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: nextName, expectedName }),
+    });
+  } catch {
+    throw new VisualApiError("The image rename result could not be confirmed. Refresh the image library before trying again.");
+  }
+  if (!response.ok) {
+    if (response.status === 409) {
+      let detail = "The image name or library entry changed. Refresh the image library and try again.";
+      try {
+        const value: unknown = await response.json();
+        if (isRecord(value) && isSafeText(value.detail, 500) && value.detail.trim()) detail = value.detail;
+      } catch { /* Show the safe local conflict explanation. */ }
+      throw new VisualApiError(detail, 409);
+    }
+    if (response.status === 404) throw new VisualApiError("This image is no longer in the library. Refresh the image library.", 404);
+    if (response.status === 422 || response.status === 400) throw new VisualApiError("Enter a valid image name between 1 and 160 characters.", response.status);
+    throw new VisualApiError("The image name could not be updated. Refresh the image library and try again.", response.status);
+  }
+  let value: unknown;
+  try { value = await response.json(); } catch { throw new VisualApiError("The image rename result could not be confirmed. Refresh the image library."); }
+  const asset = parseVisualAsset(value);
+  if (!asset || asset.id !== assetId || asset.name !== nextName) throw new VisualApiError(INVALID_RESPONSE);
+  return asset;
+}
+
 export async function uploadVisualAsset(file: File, kind: VisualKind, signal?: AbortSignal): Promise<VisualAsset> {
   if (file.size < 1 || file.size > 10 * 1024 * 1024) throw new VisualApiError("Choose an image no larger than 10 MiB.");
   if (file.name.length > 255 || !file.name.trim() || !isWellFormedText(file.name)) {
@@ -153,6 +244,85 @@ export async function uploadVisualAsset(file: File, kind: VisualKind, signal?: A
     throw new VisualApiError(UPLOAD_UNCONFIRMED);
   }
   return asset;
+}
+
+function parseCleanupFiles(value: unknown): { count: number; bytes: number } | null {
+  if (!isRecord(value) || !hasExactKeys(value, ["count", "bytes"])
+    || !Number.isSafeInteger(value.count) || (value.count as number) < 0
+    || !Number.isSafeInteger(value.bytes) || (value.bytes as number) < 0) return null;
+  return { count: value.count as number, bytes: value.bytes as number };
+}
+function parseCleanupWarnings(value: unknown): string[] | null {
+  return Array.isArray(value) && value.length <= 100 && value.every((item) => isSafeText(item, 500)) ? [...value] as string[] : null;
+}
+function parseVisualCleanupPreview(value: unknown): VisualCleanupPreview | null {
+  if (!isRecord(value) || !hasExactKeys(value, ["assetId", "name", "planToken", "deleteFiles", "warnings"])
+    || typeof value.assetId !== "string" || !opaqueId.test(value.assetId)
+    || !isSafeText(value.name, 255) || !value.name.trim()
+    || typeof value.planToken !== "string" || !opaqueId.test(value.planToken)) return null;
+  const deleteFiles = parseCleanupFiles(value.deleteFiles);
+  const warnings = parseCleanupWarnings(value.warnings);
+  if (!deleteFiles || !warnings) return null;
+  return { assetId: value.assetId, name: value.name, planToken: value.planToken, deleteFiles, warnings };
+}
+function parseVisualCleanupResult(value: unknown): VisualCleanupResult | null {
+  if (!isRecord(value) || (!hasExactKeys(value, ["assetId", "name", "operationToken", "status", "deletedFiles", "failedFiles", "warnings"])
+    && !hasExactKeys(value, ["assetId", "name", "operationToken", "status", "deletedFiles", "failedFiles", "warnings", "error"]))
+    || typeof value.assetId !== "string" || !opaqueId.test(value.assetId)
+    || !isSafeText(value.name, 255) || !value.name.trim()
+    || typeof value.operationToken !== "string" || !opaqueId.test(value.operationToken)
+    || (value.status !== "completed" && value.status !== "partial" && value.status !== "pending")
+    || !Number.isSafeInteger(value.deletedFiles) || (value.deletedFiles as number) < 0
+    || !Number.isSafeInteger(value.failedFiles) || (value.failedFiles as number) < 0
+    || !parseCleanupWarnings(value.warnings) || (value.error !== undefined && !isSafeReason(value.error))) return null;
+  return { assetId: value.assetId, name: value.name, operationToken: value.operationToken, status: value.status,
+    deletedFiles: value.deletedFiles as number, failedFiles: value.failedFiles as number,
+    warnings: [...value.warnings as string[]], ...(Object.hasOwn(value, "error") ? { error: value.error as string | null } : {}) };
+}
+
+export async function previewVisualAssetCleanup(assetId: string): Promise<VisualCleanupPreview> {
+  if (!opaqueId.test(assetId)) throw new VisualApiError("Invalid image identifier.");
+  const value = await cleanupRequestJson(`/api/visuals/assets/${assetId}/cleanup/preview`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+  });
+  const preview = parseVisualCleanupPreview(value);
+  if (!preview || preview.assetId !== assetId) throw new VisualApiError("The local service returned invalid image cleanup data.");
+  return preview;
+}
+
+export async function executeVisualAssetCleanup(assetId: string, planToken: string): Promise<VisualCleanupResult> {
+  if (!opaqueId.test(assetId) || !opaqueId.test(planToken)) throw new VisualApiError("Invalid image cleanup token.");
+  const value = await cleanupRequestJson(`/api/visuals/assets/${assetId}/cleanup`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ planToken }),
+  });
+  const result = parseVisualCleanupResult(value);
+  if (!result || result.assetId !== assetId || result.operationToken !== planToken) {
+    throw new VisualApiError("The local service returned invalid image cleanup data.");
+  }
+  return result;
+}
+
+export async function getVisualAssetCleanupResult(assetId: string, planToken: string): Promise<VisualCleanupResult> {
+  if (!opaqueId.test(assetId) || !opaqueId.test(planToken)) throw new VisualApiError("Invalid image cleanup token.");
+  const value = await cleanupRequestJson(`/api/visuals/assets/${assetId}/cleanup/${planToken}`, {});
+  const result = parseVisualCleanupResult(value);
+  if (!result || result.assetId !== assetId || result.operationToken !== planToken) {
+    throw new VisualApiError("The local service returned invalid image cleanup data.");
+  }
+  return result;
+}
+
+export async function getVisualCleanupOperations(signal?: AbortSignal): Promise<VisualCleanupResult[]> {
+  const value = await cleanupRequestJson("/api/visuals/cleanup/operations", { signal });
+  if (!isRecord(value) || !hasExactKeys(value, ["operations"]) || !Array.isArray(value.operations)) {
+    throw new VisualApiError("The local service returned invalid image cleanup data.");
+  }
+  const operations = value.operations.map(parseVisualCleanupResult);
+  if (operations.some((item) => item === null || (item.status !== "pending" && item.status !== "partial"))
+    || new Set((operations as VisualCleanupResult[]).map((item) => item.assetId)).size !== operations.length) {
+    throw new VisualApiError("The local service returned invalid image cleanup data.");
+  }
+  return operations as VisualCleanupResult[];
 }
 
 export function visualAssetUrl(id: string): string {

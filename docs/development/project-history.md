@@ -51,3 +51,34 @@ Pre-Task008 files are preserved without importing guessed bindings or recreating
 project state. No automatic pruning/deletion occurs. Bounded metadata limits return an
 explicit capacity error rather than discarding existing work. Unsaved drafts can still
 be lost when closing a tab; save status is the source of truth.
+
+## Explicit cleanup (Task014)
+
+Use the project's delete action, choose one of the three modes, review the file count/size
+and confirm. Project-only is the default and keeps generated audio/video. Intermediate
+cleanup keeps final MP4s. All-resource cleanup removes only eligible files owned by the
+project. Shared image-library originals and unknown files are preserved in every mode.
+The deleted project cannot be reopened; retained resources are available in the read-only
+retained-resource panel, grouped by original project name.
+
+The independent image-library manager deletes one unused background or illustration after
+its own preview and confirmation. An image referenced by an active project or any retained
+generation history cannot be removed. Unselecting it from the current draft does not erase
+historical references. Delete the relevant project's complete resource history first if
+that history is no longer wanted, then remove the image separately.
+
+Image library and retained resources have a dedicated **Resource manager** page. Return
+to **Create video** to continue the same draft. Image names can be edited in the manager;
+renaming changes display metadata only, keeping image bytes and saved associations intact.
+Referenced-image cleanup messages list the current project and history names that block it.
+
+Unknown nested folders are preserved without scanning recursively; preview retained bytes
+measure direct files and can undercount nested contents.
+Busy media work blocks cleanup. Changed/unsafe/shared files are preserved. A partial result
+keeps its token and exposes an explicit retry in the retained panel or image manager;
+refresh/restart does not resume deletion. Retained output availability is checked against
+its registration. Missing/changed leftovers need manual investigation, not automatic repair.
+
+The first schema-1 startup with this version keeps `state/projects-v1-backup.sqlite3` and
+migrates to schema 2. Do not run an old application version against schema 2. Keep stopped
+workspace backups: deletion is permanent through the app and does not erase operator backups.

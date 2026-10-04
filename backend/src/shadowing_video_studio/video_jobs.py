@@ -115,6 +115,20 @@ class VideoJobs:
         self._task: asyncio.Task | None = None
         self._closed = False
         self._reserved_bytes = 0
+        self._cleaned_files: set[str] = set()
+
+    def release_deleted(self, files: list[dict]) -> None:
+        """Account once for verified removed files belonging to this process's jobs."""
+        for item in files:
+            path = Path(item["path"])
+            if (
+                len(path.parts) >= 3
+                and path.parts[0] == "video"
+                and path.parts[1] in self._jobs
+                and item["path"] not in self._cleaned_files
+            ):
+                self._reserved_bytes = max(0, self._reserved_bytes - item["bytes"])
+                self._cleaned_files.add(item["path"])
 
     async def readiness(self) -> dict:
         try:
@@ -546,6 +560,15 @@ class VideoJobs:
         if not OPAQUE_ID.fullmatch(job_id):
             raise VideoJobError("Video job not found in this service session.", 404)
         if job_id in self._jobs:
+            if (
+                self._jobs[job_id].get("projectId")
+                and self.speech.assets
+                and self.speech.assets.store
+            ):
+                try:
+                    self.speech.assets.store.get_attempt(job_id)
+                except ProjectError as exc:
+                    raise VideoJobError(exc.detail, exc.status_code) from exc
             return deepcopy(self._jobs[job_id])
         store = self.speech.assets.store if self.speech.assets else None
         if store:

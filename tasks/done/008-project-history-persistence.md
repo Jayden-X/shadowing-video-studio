@@ -191,5 +191,5 @@ The owner confirmed: **saving, restoration and historical video all work; accept
 
 Limitations: no automatic import of old unregistered media, deletion/pruning, cross-device
 sync or automatic job resumption. The owner confirmed three future cleanup modes; they
-are recorded separately in [Task014](../backlog/014-project-resource-cleanup.md).
+are recorded separately in [Task014](../done/014-project-resource-cleanup.md).
 Code review was explicitly waived for this task; no review completion is claimed.

@@ -182,7 +182,7 @@ function parseAudio(value: unknown): ProjectAudio | null {
   };
 }
 
-function parseHistory(value: unknown): ProjectHistoryEntry | null {
+export function parseProjectHistoryEntry(value: unknown): ProjectHistoryEntry | null {
   if (!isRecord(value) || !validOpaqueId(value.id) || !validOpaqueId(value.jobId) || !validOpaqueId(value.projectId)
     || !validTimestamp(value.createdAt) || (value.durationSeconds !== null
       && (typeof value.durationSeconds !== "number" || !Number.isFinite(value.durationSeconds) || value.durationSeconds <= 0))
@@ -311,7 +311,7 @@ export async function getProject(id: string, signal?: AbortSignal): Promise<Proj
   }
   const history: ProjectHistoryEntry[] = [];
   for (const item of value.history as unknown[]) {
-    const parsed = parseHistory(item);
+    const parsed = parseProjectHistoryEntry(item);
     if (!parsed) throw new ProjectApiError("The local service returned invalid video history.");
     history.push(parsed);
   }
