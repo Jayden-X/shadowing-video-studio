@@ -212,15 +212,19 @@ The owner confirmed three deletion modes on 2026-10-04:
 3. Delete the project and all related resources, including final outputs.
 
 Show and confirm the deletion scope. Protect unrelated/shared resources; this does not
-mean deleting the entire media workspace or shared image library. Resource classification,
-retained-file discovery, metadata/reference lifecycle and failure recovery require a
-separate design decision. Task008 does not implement deletion or automatic pruning.
-See [Task014](../../tasks/backlog/014-project-resource-cleanup.md).
+mean deleting the entire media workspace or shared image library. ADR0005 defines retained
+resource discovery, metadata/reference lifecycle and explicit partial-failure retry.
+The owner additionally approved a separate image-library cleanup entry for unused
+backgrounds/illustrations, with preview/confirmation and protection of active-project and
+retained historical references. Task008 does not implement deletion or automatic pruning.
+Acceptance feedback adds a dedicated resource-management page for the image library and
+retained resources, named occupying-project/history feedback and image display-name editing
+that preserves existing IDs/content/associations.
+See [Task014](../../tasks/done/014-project-resource-cleanup.md).
 
 ## Open decisions
 
 - Concrete application stack and packaging strategy.
-- Project/resource deletion lifecycle (project/history persistence is selected in ADR0004).
 - Which non-default voices are exposed in MVP.
 - Which simple style controls are exposed.
 - Exact cancellation/resume behavior.

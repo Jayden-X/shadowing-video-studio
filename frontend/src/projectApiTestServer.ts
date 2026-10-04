@@ -73,6 +73,7 @@ export function createProjectApiTestServer() {
 
   function handleStorage(url: string, init?: RequestInit): Response | null {
     const method = init?.method ?? "GET";
+    if (url === "/api/projects/retained/resources" && method === "GET") return response({ projects: [] });
     if (url === "/api/projects") {
       if (method === "GET") return response({ projects: summary() });
       if (method === "POST") {

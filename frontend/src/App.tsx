@@ -7,6 +7,9 @@ import { useVideo } from "./useVideo";
 import { useVisuals } from "./useVisuals";
 import { useVisualSelections } from "./useVisualSelections";
 import { BackgroundImageControls, SentenceIllustrationPicker } from "./VisualAssets";
+import { ProjectCleanup, RetainedResources } from "./ProjectCleanup";
+import { VisualLibraryCleanup } from "./VisualLibraryCleanup";
+import type { ProjectCleanupResult } from "./cleanupApi";
 
 import {
   getBackendHealth,
@@ -57,6 +60,7 @@ type PreparationMode = "manual" | "ai";
 type Replacement = { kind: "manual"; source: string } | { kind: "ai"; proposal: TextProposal };
 type ProjectNavigation = { kind: "new" } | { kind: "open"; projectId: string };
 type SaveStatus = "loading" | "unsaved" | "saving" | "saved" | "failed";
+type AppPage = "create" | "resources";
 type PendingCreate = { name: string; snapshot: ProjectSnapshot; key: string; operationToken: string };
 type PendingSave = { projectId: string; name: string; snapshot: ProjectSnapshot; key: string; expectedRevision: number; operationToken: string };
 const AI_REQUEST_TIMEOUT_MS = 120_000;
@@ -96,6 +100,10 @@ export default function App() {
   const [workspaceReady, setWorkspaceReady] = useState(false);
   const [generationPreparing, setGenerationPreparing] = useState(false);
   const [pendingNavigation, setPendingNavigation] = useState<ProjectNavigation | null>(null);
+  const [cleanupDialogOpen, setCleanupDialogOpen] = useState(false);
+  const [imageCleanupDialogOpen, setImageCleanupDialogOpen] = useState(false);
+  const [page, setPage] = useState<AppPage>("create");
+  const [resourceRefreshSignal, setResourceRefreshSignal] = useState(0);
   const [lastProjectId, setLastProjectIdState] = useState<string | null>(getLastProjectId);
   const sentenceInputs = useRef(new Map<SentenceId, HTMLTextAreaElement>());
   const prepareButton = useRef<HTMLButtonElement>(null);
@@ -348,6 +356,46 @@ export default function App() {
     const detail = await getProject(projectId);
     if (sequence !== projectLoadSequence.current) return;
     applyProjectDetail(detail);
+  }
+
+  function handleProjectRemoved(projectId: string, result: ProjectCleanupResult) {
+    setResourceRefreshSignal((value) => value + 1);
+    setProjects((current) => current.filter((item) => item.id !== projectId));
+    if (lastProjectId === projectId) {
+      setLastProjectId(null);
+      setLastProjectIdState(null);
+    }
+    if (activeProject.current?.id === projectId) {
+      if (autosaveTimer.current !== null) clearTimeout(autosaveTimer.current);
+      autosaveTimer.current = null;
+      resetToNewProject();
+      setNotice(result.status === "partial"
+        ? `Project “${result.projectName}” was removed with ${result.failedFiles} file cleanup failures. Review Retained resources and retry the cleanup there.`
+        : result.status === "pending"
+          ? `Cleanup for “${result.projectName}” is pending. The project is closed to editing; check Retained resources and retry the same cleanup there.`
+          : `Project “${result.projectName}” was removed. Any retained media is available below.`);
+    }
+  }
+
+  async function refreshAfterUnconfirmedCleanup(projectId: string) {
+    try {
+      const currentProjects = await listProjects();
+      setProjects(currentProjects);
+      if (!currentProjects.some((item) => item.id === projectId)) {
+        if (lastProjectId === projectId) {
+          setLastProjectId(null);
+          setLastProjectIdState(null);
+        }
+        if (activeProject.current?.id === projectId) {
+          resetToNewProject();
+          setNotice("This project is no longer in the saved project list. Check Retained resources for cleanup results.");
+        }
+        return;
+      }
+      if (activeProject.current?.id === projectId) applyProjectDetail(await getProject(projectId));
+    } catch (error: unknown) {
+      setProjectError(error instanceof ProjectApiError ? error.message : "Project status could not be refreshed after cleanup.");
+    }
   }
 
   async function performNavigation(navigation: ProjectNavigation, discard = false) {
@@ -690,8 +738,13 @@ export default function App() {
   }
 
   const preparingAgain = replacement !== null;
-  const projectSwitchBlocked = preparingAgain || aiPending || speech.waiting || video.waiting || generationPreparing;
-  const editingLocked = preparingAgain || aiPending || speech.waiting || video.waiting || generationPreparing;
+  const mediaWorkBusy = preparingAgain || aiPending || generationPreparing || speech.waiting || video.waiting
+    || speech.outstanding || video.outstanding;
+  const projectSwitchBlocked = preparingAgain || aiPending || speech.waiting || video.waiting || generationPreparing || cleanupDialogOpen || imageCleanupDialogOpen;
+  const editingLocked = preparingAgain || aiPending || speech.waiting || video.waiting || generationPreparing || cleanupDialogOpen || imageCleanupDialogOpen;
+  const cleanupBlocked = !workspaceReady || projectLoadState !== "online" || projectSwitchBlocked || speech.outstanding || video.outstanding
+    || saveStatus === "saving" || (!!project && pendingSubmissionsFor(project.id).length > 0);
+  const imageCleanupBlocked = mediaWorkBusy || cleanupDialogOpen || imageCleanupDialogOpen;
   const sourceLocked = editingLocked || proposal !== null;
   const providerAvailable = providers.some((item) => item.id === selectedProvider && item.available);
   const sourceOverLimit = mode === "ai" && sourceDraft.length > MAX_SOURCE_LENGTH;
@@ -704,6 +757,7 @@ export default function App() {
   ]);
   const outstanding = speech.outstandingInfo ?? video.outstandingInfo;
   const activeHistory = projectDetail && projectDetail.id === project?.id ? projectDetail.history : [];
+  const selectedVisualAssetIds = new Set([backgroundAssetId, ...Object.values(illustrationsBySentence)].filter((id): id is string => id !== null));
 
   return (
     <main className="app-shell">
@@ -720,6 +774,18 @@ export default function App() {
           {backendState === "offline" && "Local service unavailable · Editing still works"}
         </p>
       </header>
+
+      <nav className="app-page-nav" aria-label="Studio pages">
+        <button type="button" aria-current={page === "create" ? "page" : undefined}
+          disabled={cleanupDialogOpen || imageCleanupDialogOpen} onClick={() => setPage("create")}>Create video</button>
+        <button type="button" aria-current={page === "resources" ? "page" : undefined}
+          disabled={cleanupDialogOpen || imageCleanupDialogOpen} onClick={() => setPage("resources")}>Resource manager</button>
+      </nav>
+      {outstanding && <p className="project-outstanding" role="status">
+        A {speech.outstandingInfo ? "speech" : "video"} submission for <strong>{outstanding.projectName}</strong> remains outstanding. Switching pages does not cancel it.
+      </p>}
+
+      <section className="app-page create-video-page" aria-label="Create video" hidden={page !== "create"}>
 
       <section className="project-toolbar" aria-label="Project controls">
         <div className="project-name-field">
@@ -754,12 +820,12 @@ export default function App() {
           {saveStatus === "failed" && "Save failed"}
         </span>
       </section>
+      <ProjectCleanup activeProject={project} disabled={cleanupBlocked} flushSave={flushSave}
+        onDialogOpenChange={setCleanupDialogOpen} onProjectRemoved={handleProjectRemoved}
+        onRefreshProject={refreshAfterUnconfirmedCleanup} />
       {projectLoadState === "offline" && <p className="input-error" role="status">Saved project storage is unavailable. You can keep editing this draft; save status will update when the local service is available.</p>}
       {saveError && <p className="input-error" role="alert">{saveError}</p>}
       {projectError && <p className="input-error" role="alert">{projectError}</p>}
-      {outstanding && <p className="project-outstanding" role="status">
-        A {speech.outstandingInfo ? "speech" : "video"} submission for <strong>{outstanding.projectName}</strong> remains outstanding. Switching projects does not cancel it.
-      </p>}
 
       {pendingNavigation && (
         <section className="confirmation" role="alertdialog" aria-labelledby="save-before-switch-title">
@@ -995,6 +1061,13 @@ export default function App() {
         locked={editingLocked || speech.outstanding || proposal !== null} backgroundAssetId={backgroundAssetId}
         illustrationsBySentence={illustrationsBySentence} visualProblem={visualProblem} history={activeHistory}
         onGenerate={(sentences) => { void generateVideo(sentences); }} />
+      </section>
+
+      <section className="app-page resource-manager-page" aria-label="Resource manager" hidden={page !== "resources"}>
+        <RetainedResources refreshSignal={resourceRefreshSignal} disabled={mediaWorkBusy} />
+        <VisualLibraryCleanup visuals={visuals} selectedAssetIds={selectedVisualAssetIds}
+          projectName={projectName} busy={imageCleanupBlocked} onDialogOpenChange={setImageCleanupDialogOpen} />
+      </section>
     </main>
   );
 }

@@ -50,6 +50,7 @@ describe("visual asset workflow", () => {
       const storageResponse = projectServer.handleStorage(url, init);
       if (storageResponse) return storageResponse;
       if (url === "/api/health") return json({ status: "ok" });
+      if (url === "/api/visuals/cleanup/operations") return json({ operations: [] });
       if (url === "/api/text/providers") return json({ providers: availableProviders });
       if (url === "/api/visuals/status") return json(visualStatus);
       if (url === "/api/visuals/assets") return json({ assets: registeredIllustration ? [...initialAssets, registeredIllustration] : initialAssets });

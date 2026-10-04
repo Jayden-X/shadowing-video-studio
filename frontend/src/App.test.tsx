@@ -12,6 +12,8 @@ afterEach(() => {
 beforeEach(() => {
   vi.stubGlobal("fetch", vi.fn(async (url: string) => jsonResponse(
     url === "/api/projects" ? { projects: [] }
+      : url === "/api/projects/retained/resources" ? { projects: [] }
+      : url === "/api/visuals/cleanup/operations" ? { operations: [] }
       : url === "/api/text/providers" ? { providers: availableProviders }
       : url === "/api/visuals/status" ? visualStatus
       : url === "/api/visuals/assets" ? { assets: [] }
@@ -32,6 +34,8 @@ function jsonResponse(value: unknown, status = 200): Response {
 function mockPreparation(result: (init: RequestInit | undefined) => Response | Promise<Response>) {
   const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
     if (url === "/api/projects") return jsonResponse({ projects: [] });
+    if (url === "/api/projects/retained/resources") return jsonResponse({ projects: [] });
+    if (url === "/api/visuals/cleanup/operations") return jsonResponse({ operations: [] });
     if (url === "/api/text/providers") return jsonResponse({ providers: availableProviders });
     if (url === "/api/text/prepare") return result(init);
     if (url === "/api/visuals/status") return jsonResponse(visualStatus);

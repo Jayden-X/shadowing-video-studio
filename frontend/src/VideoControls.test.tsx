@@ -22,6 +22,10 @@ function mockVideo(create: (snapshot: Snapshot, init: RequestInit | undefined) =
     const storageResponse = projectServer.handleStorage(url, init);
     if (storageResponse) return storageResponse;
     if (url === "/api/video/status") return json({ available: true, reason: null });
+    if (url === "/api/visuals/status") return json({ available: true, reason: null, maxUploadBytes: 10 * 1024 * 1024,
+      formats: ["image/png", "image/jpeg", "image/webp"] });
+    if (url === "/api/visuals/assets") return json({ assets: [] });
+    if (url === "/api/visuals/cleanup/operations") return json({ operations: [] });
     if (url === "/api/speech/status") return json({ available: true, reason: null, voice: "Aiden", model: "Qwen3-TTS-12Hz-0.6B-CustomVoice", backend: "cpu" });
     if (url === "/api/speech/capabilities") return json({ available: true, reason: null, defaultVoice: "Aiden", model: "Qwen3-TTS-12Hz-0.6B-CustomVoice", language: "English",
       voices: [{ id: "Aiden", label: "Aiden", configurationFingerprint: binding.configurationFingerprint }] });

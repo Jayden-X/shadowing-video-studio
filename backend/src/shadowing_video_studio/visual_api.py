@@ -9,13 +9,16 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import Response
+from pydantic import BaseModel, ConfigDict, Field, StrictStr
 
+from shadowing_video_studio.project_store import ProjectError
 from shadowing_video_studio.providers.image_probe import ImageProbe
 from shadowing_video_studio.speech_api import get_speech_service, verify_local_request
 from shadowing_video_studio.speech_settings import SpeechSettings
 from shadowing_video_studio.video_rendering import VideoRenderingError
 from shadowing_video_studio.video_settings import VideoSettings
 from shadowing_video_studio.visual_assets import VisualAssetError, VisualLibrary
+from shadowing_video_studio.visual_cleanup import VisualCleanup
 
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 FORMATS = ["image/png", "image/jpeg", "image/webp"]
@@ -107,10 +110,15 @@ def status(service: Annotated[VisualService, Depends(get_visual_service)]) -> di
 
 
 @router.get("/assets")
-def list_assets(service: Annotated[VisualService, Depends(get_visual_service)]) -> dict:
+def list_assets(
+    request: Request, service: Annotated[VisualService, Depends(get_visual_service)]
+) -> dict:
     try:
-        return {"assets": required_library(service).list_assets()}
-    except VisualAssetError as exc:
+        assets = required_library(service).list_assets()
+        store = _project_store(request)
+        hidden = store.hidden_visual_ids() if store is not None else set()
+        return {"assets": [asset for asset in assets if asset["id"] not in hidden]}
+    except (VisualAssetError, ProjectError) as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
@@ -160,10 +168,13 @@ async def upload(
 
 @router.get("/assets/{asset_id}")
 def preview(
-    asset_id: str, service: Annotated[VisualService, Depends(get_visual_service)]
+    asset_id: str, request: Request, service: Annotated[VisualService, Depends(get_visual_service)]
 ) -> Response:
     library = required_library(service)
     try:
+        store = _project_store(request)
+        if store is not None and asset_id in store.hidden_visual_ids():
+            raise ProjectError("This image has been removed from the library.", 404)
         asset = library.get(asset_id)
         content = library.read(asset_id)
         return Response(
@@ -174,5 +185,125 @@ def preview(
                 "X-Content-Type-Options": "nosniff",
             },
         )
-    except VisualAssetError as exc:
+    except (VisualAssetError, ProjectError) as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+
+def _project_store(request: Request):
+    # Local import avoids the project -> video -> visual router initialization cycle.
+    from shadowing_video_studio.project_api import get_project_service
+
+    return get_project_service(request).store
+
+
+def _cleanup(request: Request, service: VisualService) -> VisualCleanup:
+    store = _project_store(request)
+    if store is None:
+        raise HTTPException(
+            status_code=503, detail="Project storage is required for safe image cleanup."
+        )
+    library = required_library(service)
+    if library.workspace != store.workspace:
+        raise HTTPException(status_code=503, detail="Image and project workspaces do not match.")
+    return VisualCleanup(store, get_speech_service(request).gate, library)
+
+
+class VisualCleanupRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    planToken: StrictStr = Field(pattern=r"^[0-9a-f]{32}$")
+
+
+class VisualRenameRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    name: StrictStr = Field(min_length=1, max_length=160)
+    expectedName: StrictStr = Field(min_length=1, max_length=160)
+
+
+@router.patch("/assets/{asset_id}")
+async def rename_asset(
+    asset_id: str,
+    payload: VisualRenameRequest,
+    request: Request,
+    service: Annotated[VisualService, Depends(get_visual_service)],
+) -> dict:
+    owner = "visual-rename-" + uuid.uuid4().hex
+    gate = get_speech_service(request).gate
+    if not gate.claim(owner):
+        raise HTTPException(status_code=409, detail="Wait for local media work before renaming.")
+    try:
+        store = _project_store(request)
+        if store is None:
+            raise ProjectError("Project storage is required for safe image renaming.", 503)
+        if asset_id in store.hidden_visual_ids():
+            raise ProjectError("This image has a confirmed cleanup and cannot be renamed.", 409)
+        library = required_library(service)
+        if library.workspace != store.workspace:
+            raise ProjectError("Image and project workspaces do not match.", 503)
+        task = asyncio.create_task(
+            asyncio.to_thread(library.rename, asset_id, payload.name, payload.expectedName)
+        )
+        try:
+            asset = await asyncio.shield(task)
+        except asyncio.CancelledError:
+            await task
+            raise
+        return asset.dto()
+    except (VisualAssetError, ProjectError) as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    finally:
+        gate.release(owner)
+
+
+@router.get("/cleanup/operations")
+def unfinished_cleanup(
+    request: Request, service: Annotated[VisualService, Depends(get_visual_service)]
+) -> dict:
+    try:
+        return {"operations": _cleanup(request, service).store.unfinished_visual_cleanups()}
+    except ProjectError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+
+@router.post("/assets/{asset_id}/cleanup/preview")
+async def cleanup_preview(
+    asset_id: str, request: Request, service: Annotated[VisualService, Depends(get_visual_service)]
+) -> dict:
+    try:
+        return await _cleanup(request, service).preview(asset_id)
+    except (ProjectError, VisualAssetError, OSError) as exc:
+        raise HTTPException(
+            status_code=getattr(exc, "status_code", 503),
+            detail=getattr(exc, "detail", "Image cleanup is unavailable."),
+        ) from exc
+
+
+@router.post("/assets/{asset_id}/cleanup")
+async def cleanup_execute(
+    asset_id: str,
+    payload: VisualCleanupRequest,
+    request: Request,
+    service: Annotated[VisualService, Depends(get_visual_service)],
+) -> dict:
+    try:
+        return await _cleanup(request, service).execute(asset_id, payload.planToken)
+    except (ProjectError, VisualAssetError, OSError) as exc:
+        raise HTTPException(
+            status_code=getattr(exc, "status_code", 503),
+            detail=getattr(exc, "detail", "Image cleanup is unavailable."),
+        ) from exc
+
+
+@router.get("/assets/{asset_id}/cleanup/{token}")
+def cleanup_status(
+    asset_id: str,
+    token: str,
+    request: Request,
+    service: Annotated[VisualService, Depends(get_visual_service)],
+) -> dict:
+    try:
+        operation = _cleanup(request, service).store.visual_cleanup_operation(asset_id, token)
+        if operation["result"] is None:
+            raise ProjectError("Image deletion has not been confirmed.", 409)
+        return {k: v for k, v in operation["result"].items() if k != "donePaths"}
+    except ProjectError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc

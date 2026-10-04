@@ -9,6 +9,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr, field_validator
 
+from shadowing_video_studio.project_cleanup import MODES, ProjectCleanup
 from shadowing_video_studio.project_commands import ProjectCommand
 from shadowing_video_studio.project_store import ProjectError, ProjectStore, validate_snapshot
 from shadowing_video_studio.speech import SpeechError, SpeechSentence
@@ -126,6 +127,88 @@ def project_failure(exc: ProjectError | SpeechError | VideoJobError) -> HTTPExce
 async def list_projects(store: Annotated[ProjectStore, Depends(get_store)]) -> dict:
     try:
         return {"projects": await asyncio.to_thread(store.list_projects)}
+    except ProjectError as exc:
+        raise project_failure(exc) from exc
+
+
+class CleanupPreviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    mode: StrictStr
+    expectedRevision: StrictInt = Field(ge=1)
+
+    @field_validator("mode")
+    @classmethod
+    def mode_choice(cls, value: str) -> str:
+        if value not in MODES:
+            raise ValueError("Choose a cleanup mode.")
+        return value
+
+
+class CleanupRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    planToken: StrictStr = Field(pattern=TOKEN)
+
+
+@router.get("/retained/resources")
+async def retained_resources(
+    store: Annotated[ProjectStore, Depends(get_store)],
+    speech: Annotated[SpeechJobs, Depends(get_speech_service)],
+) -> dict:
+    try:
+        return await ProjectCleanup(store, speech.gate).retained()
+    except ProjectError as exc:
+        raise project_failure(exc) from exc
+
+
+@router.post("/{project_id}/cleanup/preview")
+async def preview_cleanup(
+    project_id: str,
+    payload: CleanupPreviewRequest,
+    store: Annotated[ProjectStore, Depends(get_store)],
+    speech: Annotated[SpeechJobs, Depends(get_speech_service)],
+) -> dict:
+    try:
+        return await ProjectCleanup(store, speech.gate).preview(
+            project_id, payload.mode, payload.expectedRevision
+        )
+    except ProjectError as exc:
+        raise project_failure(exc) from exc
+
+
+@router.post("/{project_id}/cleanup")
+async def execute_cleanup(
+    project_id: str,
+    payload: CleanupRequest,
+    request: Request,
+    store: Annotated[ProjectStore, Depends(get_store)],
+    speech: Annotated[SpeechJobs, Depends(get_speech_service)],
+) -> dict:
+    try:
+        video = get_video_service(request)
+
+        def release(files: list[dict]) -> None:
+            if speech.assets is not None:
+                speech.assets.release_deleted(files)
+            video.release_deleted(files)
+
+        return await ProjectCleanup(store, speech.gate, release).execute(
+            project_id, payload.planToken
+        )
+    except ProjectError as exc:
+        raise project_failure(exc) from exc
+
+
+@router.get("/{project_id}/cleanup/{plan_token}")
+async def cleanup_status(
+    project_id: str,
+    plan_token: str,
+    store: Annotated[ProjectStore, Depends(get_store)],
+) -> dict:
+    try:
+        operation = await asyncio.to_thread(store.cleanup_operation, project_id, plan_token)
+        if operation["result"] is None:
+            raise ProjectError("Deletion has not been confirmed.", 409)
+        return {k: v for k, v in operation["result"].items() if k != "donePaths"}
     except ProjectError as exc:
         raise project_failure(exc) from exc
 
