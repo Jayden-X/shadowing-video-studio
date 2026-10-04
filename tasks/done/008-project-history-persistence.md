@@ -174,7 +174,10 @@ The owner confirmed: **saving, restoration and historical video all work; accept
   deterministic helper checks also passed as recorded above.
 - Deployed the integrated build on the approved Mac, preserving two existing projects.
   A separate background/no-illustration real export completed at **6.866667 s**; saved
-  bindings/history remained readable. Range preview and attachment download were checked.
+  bindings/history remained readable. The owner accepted preview/download before this
+  main integration; existing backend tests verify Range and attachment responses. An
+  additional direct Range/download rerun against the final Mac build could not connect
+  because SSH intermittently timed out during banner exchange; it is not claimed passed.
 - Mac service URL: `http://127.0.0.1:8877/`, one worker. Source:
   `/Users/qinwei/Documents/shadowing-video-studio/tmp/task008-20261004-001/source-003`.
   Settings/log/PID files: `settings-003.json`, `server-003.log`, `server-003.pid` within
