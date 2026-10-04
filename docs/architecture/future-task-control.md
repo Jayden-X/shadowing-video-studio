@@ -2,9 +2,13 @@
 
 ## Status and boundary
 
-Design requirements reserved for a later release, based on the owner's request. This document selects no scheduler, persistence format, MCP transport, framework, or credential strategy.
+Design requirements reserved for a later release, based on the owner's request. This document selects no scheduler or task/checkpoint persistence format. The local MCP subset now has an accepted implementation decision in [ADR 0006](decisions/0006-local-mcp-control.md); the remaining future execution requirements below are not implemented by Task013.
 
-The MVP stays manually initiated, runs one video at a time, and contains no scheduler or MCP server. Existing provider/rendering seams remain in place.
+The original MVP was manually initiated and contained no MCP server. Task013 now adds
+owner-authorized local MCP control under [ADR0006](decisions/0006-local-mcp-control.md).
+It uses transient reviewed requests while Task008 is developed separately. Scheduling,
+durable task/checkpoint control and automatic recovery remain future requirements.
+Existing provider/rendering seams and the single-heavy-job rule remain in place.
 
 ## Prepared work and execution attempts
 
@@ -51,7 +55,7 @@ UI, a future CLI, and MCP are adapters to the same application commands and stat
 
 Expose explicit capabilities with validated inputs and useful status/errors. A future local MCP client may inspect capabilities, prepare/edit assignments, and request supported execution actions. Start, resume, cancel, and export must enforce the command's permissions and the user's applicable approvals; required human review remains authoritative. Input revisions invalidate affected approvals where appropriate.
 
-The initial future MCP deployment boundary is local. Before implementation, choose a local transport, permitted client/operation scope, connection authorization, and controlled filesystem access. Do not assume that local access grants unrestricted control, and do not choose a new credential strategy in this design note.
+The initial MCP deployment boundary is local. [ADR 0006](decisions/0006-local-mcp-control.md) selects the official Python SDK, Streamable HTTP in the existing application process, distinct local read/execute credentials, and separate human review for frozen generation requests. [The tool contract](../development/mcp-control.md) exposes session-only preparation and generation; saved-project editing, durable task control, resume and cancellation remain deferred. Local access does not grant unrestricted filesystem or process control.
 
 ## Decisions required before implementation
 
@@ -59,6 +63,6 @@ The initial future MCP deployment boundary is local. Before implementation, choo
 - Concrete lifecycle transitions, retry/idempotency contracts, and recovery validation.
 - Schedule/time-zone/daylight-saving semantics and idle/resource policy.
 - Diagnostic storage, access, and retention.
-- Local MCP transport, capability contracts, authorization, and approval handling.
+- MCP project/revision integration after Task008, durable approval/idempotency policy, and any extension beyond direct local access. The Task013 transport/access/review subset is selected in ADR 0006.
 
 Each implementation must enter through a scoped task and any required ADR. These seams do not expand the current task queue into an automatic product-development plan.

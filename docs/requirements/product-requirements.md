@@ -25,7 +25,8 @@ The first version is intentionally limited to:
 - No multi-user collaboration.
 - No cloud runtime.
 - No batch jobs.
-- Manual initiation of the current workflow; no scheduler or MCP server in MVP.
+- Manual initiation of the original MVP workflow; no scheduler. The owner separately
+  authorized optional local MCP control in Task013 after MVP acceptance.
 
 These are MVP product limits only. The architecture should avoid hard-coding assumptions that would make later expansion unnecessarily expensive.
 
@@ -45,7 +46,9 @@ Do not prebuild these features in the MVP.
 
 ## Confirmed future task-control requirements
 
-These requirements preserve a design path beyond MVP. They do not authorize implementing scheduling, unattended execution, or MCP in the first release.
+These requirements preserve a design path beyond the first release. Scheduling and
+unattended execution remain deferred. Task013 is the owner-authorized local MCP follow-up;
+it defers project persistence/synchronization to Task008 and preserves human review.
 
 ### Prepared tasks and scheduled execution
 
@@ -61,11 +64,13 @@ The initial future local executor should run at most one heavy model/media job a
 
 ### MCP control
 
-Future AI clients should be able to discover capabilities, prepare tasks, inspect progress and results, and request supported execution actions through MCP.
+Task013 enables local AI clients to discover capabilities, prepare sentence proposals, inspect current-session progress and results, and request human-reviewed speech/video generation. Saved-project preparation/editing and durable task control remain future integration work after Task008.
 
 MCP must use the same application commands, validation, permissions, and human-review rules as the UI or a future CLI. It must not modify project files/state directly or bypass review. Starting, resuming, cancelling, and exporting work must respect the user's declared approval policy and validated inputs.
 
-The first future MCP boundary is local. Transport, authorization details, and credential handling require decisions before implementation; this requirement does not introduce remote access or a new secret strategy.
+The first MCP boundary is local. Task013 and ADR0006 select the approved Streamable HTTP
+adapter and local read/execute access policy. Remote access, accounts and automatic
+review bypass remain out of scope. MCP project/history integration remains a follow-up against the initial Task008 branch.
 
 See [future task and control seams](../architecture/future-task-control.md) for the architecture constraints and deferred decisions.
 

@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from shadowing_video_studio.project_commands import ProjectCommand, attempt_job
-from shadowing_video_studio.project_store import ProjectError
+from shadowing_video_studio.project_store import ProjectError, ProjectStore
 from shadowing_video_studio.providers.ffmpeg import FfmpegVideoRenderer
 from shadowing_video_studio.speech import VOICE, SpeechError, SpeechSentence
 from shadowing_video_studio.speech_assets import OPAQUE_ID, SpeechAsset, flush_media
@@ -103,12 +103,14 @@ class VideoJobs:
         renderer: VideoRenderer | None = None,
         tool_preflight: VideoToolPreflight | None = None,
         visuals: VisualLibrary | None = None,
+        project_store: ProjectStore | None = None,
     ) -> None:
         self.settings = settings
         self.speech = speech
         self.gate = speech.gate
         self.renderer = renderer
         self.visuals = visuals
+        self.project_store = project_store
         self._tool_preflight = tool_preflight or VideoToolPreflight()
         self._jobs: dict[str, dict] = {}
         self._assets: dict[str, VideoAsset] = {}
@@ -269,6 +271,18 @@ class VideoJobs:
         if not self.gate.claim(job_id):
             raise VideoJobError("A local media job is already running. Wait for it to finish.", 409)
         try:
+            # Cleanup shares this gate. Recheck tombstones after claiming it so an image
+            # removed while inputs were freezing cannot be accepted by a stale request.
+            if self.project_store is not None:
+                try:
+                    hidden = await asyncio.to_thread(self.project_store.hidden_visual_ids)
+                except ProjectError as exc:
+                    raise VideoJobError(exc.detail, exc.status_code) from exc
+                chosen = {background_asset_id} | {item.illustration_asset_id for item in selections}
+                if hidden.intersection(chosen):
+                    raise VideoJobError(
+                        "This image was removed from the library. Select another image.", 409
+                    )
             readiness = await self.readiness()
             if self._closed:
                 raise VideoJobError(
