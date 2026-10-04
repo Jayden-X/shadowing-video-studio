@@ -74,7 +74,5 @@ model and covers backend production/critical code only, excluding frontend and t
   present in the UI/docs; configurable colors and full reference subtitle layout are deferred.
 - Delivery remains in review pending PR/CI and squash integration. No browser-driven
   end-to-end TTS run was performed; genuine adapter/media validation reused accepted audio.
-- Automatic approval review rejected the combined commit/push request because the GitHub
-  remote belongs to the original participant and sensitive source export was not explicitly
-  authorized. Local implementation/validation is complete; remote push/PR requires the
-  owner's explicit approval of `Jayden-X/shadowing-video-studio`. No remote changes occurred.
+- Owner explicitly authorized pushing the verified branch and creating a PR in
+  `Jayden-X/shadowing-video-studio` on 2026-10-04. Task remains in review until integration.
