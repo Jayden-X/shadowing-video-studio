@@ -41,7 +41,7 @@ directly. Review does not launch generation; approved requests require explicit 
 - [x] Existing media services validate exact bindings, preserve files and expose progress.
 - [x] Task008 seam and session/restart limitations are documented.
 - [x] Relevant local checks pass and required backend review findings are resolved.
-- [ ] Pull request CI passes before merge.
+- [x] Pull request CI passes before merge.
 
 ## Out of scope
 
@@ -71,7 +71,7 @@ versions and restore history; it must not silently reuse session approval or aut
 Documentation review reconciles the original MVP exclusion with owner-authorized Task013
 and ADR 0005, documents backend-origin review paths (development port 8765 or explicit
 standalone port 8000), operation-specific payloads and structured/safe protocol results.
-Local validation and required code review completed; pull request CI remains a merge gate.
+Local validation and required code review completed; pull request CI passed on implementation head `a151729`.
 
 The owner subsequently reported an initial Task008 implementation on
 `feature/008-project-history`, subject to further changes. Its fetched API/application
@@ -108,4 +108,8 @@ isolation from trusted local processes with separate HTTP/browser access.
 MCP is disabled until local credentials are configured. Requests/approval/idempotency are
 session-only; saved-project tools, editor synchronization and durable request binding
 remain reserved. No scheduling or cancel/resume. No real Qwen/FFmpeg generation or paid
-provider request ran; fake providers validate controls, not media quality. PR CI is pending.
+provider request ran; fake providers validate controls, not media quality.
+
+Draft PR #16 targets `feature/008-project-history`; no merge was requested.
+Repository hygiene, backend and frontend CI all passed on implementation head `a151729`
+(run `37199481077`). This task stays in review pending owner acceptance.
