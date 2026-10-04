@@ -7,6 +7,11 @@ import httpx
 from fastapi import FastAPI
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
+from test_projects import Services as ProjectServices
+from test_projects import client_for as project_client_for
+from test_projects import sentence as project_sentence
+from test_projects import snapshot as project_snapshot
+from test_projects import speech_request as project_speech_request
 from test_speech_jobs import FakeSpeech
 
 from shadowing_video_studio.control import ApplicationControl
@@ -16,7 +21,7 @@ from shadowing_video_studio.mcp_control import (
     McpSettings,
     create_mcp,
 )
-from shadowing_video_studio.speech import HeavyJobGate
+from shadowing_video_studio.speech import VOICE, HeavyJobGate, SpeechSentence
 from shadowing_video_studio.speech_assets import SpeechAssets
 from shadowing_video_studio.speech_jobs import SpeechJobs
 
@@ -48,13 +53,19 @@ class FakeVisuals:
         return {"available": False, "reason": "Synthetic fixture."}
 
 
-def make_app(tmp_path, settings=None):
-    speech = SpeechJobs(FakeSpeech(), SpeechAssets(tmp_path), HeavyJobGate())
-    video = FakeVideo()
+def make_app(tmp_path, settings=None, project_services=None):
+    if project_services is None:
+        speech = SpeechJobs(FakeSpeech(), SpeechAssets(tmp_path), HeavyJobGate())
+        video = FakeVideo()
+    else:
+        speech = project_services.speech
+        video = project_services.video
     application = FastAPI()
     application.state.speech = speech
     application.state.video = video
     application.state.visuals = FakeVisuals()
+    if project_services is not None:
+        application.state.projects = project_services.projects
     application.state.control = ApplicationControl(speech, video)
     application.state.mcp_settings = settings or McpSettings(READ_TOKEN, EXECUTE_TOKEN)
     application.state.mcp = create_mcp(application)
@@ -271,5 +282,143 @@ def test_mcp_access_gate_blocks_disabled_unauthorized_and_remote_requests(tmp_pa
                 assert rejected.status_code == 403
         await application.state.control.close()
         await speech.close()
+
+    asyncio.run(scenario())
+
+
+def test_mcp_transient_speech_uses_project_store_assets_without_binding_saved_project(tmp_path):
+    async def scenario():
+        original_services = ProjectServices(tmp_path)
+        saved_snapshot = project_snapshot(
+            [project_sentence("sentence-001", "Saved project dialogue.")],
+            source_text="Saved original source.",
+        )
+        saved = original_services.store.create("Saved practice", saved_snapshot, "1" * 32)
+        async with project_client_for(original_services) as project_ui:
+            saved_job_response = await project_ui.post(
+                f"/api/projects/{saved['id']}/speech",
+                json=project_speech_request(
+                    saved_snapshot, "2" * 32, project_name="Saved practice", revision=1
+                ),
+            )
+            assert saved_job_response.status_code == 202, saved_job_response.text
+            await original_services.speech.wait()
+            saved_job_id = saved_job_response.json()["id"]
+            assert original_services.speech.get(saved_job_id)["status"] == "completed"
+        saved_job = original_services.speech.get(saved_job_id)
+        saved_audio_id = saved_job["sentences"][0]["assetId"]
+        assert original_services.store.speech_asset(saved_audio_id) is not None
+        assert [item["id"] for item in original_services.store.attempts(saved["id"])] == [
+            saved_job_id
+        ]
+        await original_services.video.close()
+        await original_services.speech.close()
+
+        # A fresh service can resolve the saved job through Task008's durable store.
+        project_services = ProjectServices(tmp_path)
+        before = project_services.store.get(saved["id"])
+        assert before["revision"] == 1
+        before_attempts = project_services.store.attempts(saved["id"])
+        assert [item["id"] for item in before_attempts] == [saved_job_id]
+        assert project_services.speech.get(saved_job_id)["status"] == "completed"
+
+        application, speech = make_app(tmp_path, project_services=project_services)
+        assert speech is project_services.speech
+        assert speech.assets is project_services.assets
+        assert speech.assets.store is project_services.store
+        assert application.state.control.speech is speech
+        assert application.state.control.video is project_services.video
+        assert application.state.video.speech is speech
+        assert application.state.video.gate is speech.gate
+
+        mcp = application.state.mcp
+        text = "Transient MCP dialogue remains separate from the saved project."
+        async with mcp.session_manager.run():
+            async with mcp_session(application, READ_TOKEN) as reader:
+                hidden_saved_job = await reader.call_tool(
+                    "get_job", {"kind": "speech", "job_id": saved_job_id}
+                )
+                assert hidden_saved_job.isError
+                assert result_data(hidden_saved_job)["error"]["code"] == "not_found"
+                assert result_data(hidden_saved_job)["error"]["statusCode"] == 404
+
+            async with mcp_session(application, EXECUTE_TOKEN) as execute_client:
+                accepted = await execute_client.call_tool(
+                    "request_generation",
+                    {
+                        "request": {
+                            "requestId": "unbound-transient-request",
+                            "operation": "speech",
+                            "payload": {"sentences": [{"id": "transient-1", "text": text}]},
+                        }
+                    },
+                )
+                assert not accepted.isError
+                request = result_data(accepted)
+                assert request["state"] == "needs_review"
+                assert "projectId" not in request and "projectRevision" not in request
+
+                async with httpx.AsyncClient(
+                    transport=httpx.ASGITransport(app=application),
+                    base_url="http://127.0.0.1:8000",
+                ) as browser:
+                    review_page = await browser.get(request["reviewPath"])
+                    nonce_match = re.search(
+                        r'name="nonce" value="([A-Za-z0-9_-]+)"', review_page.text
+                    )
+                    assert review_page.status_code == 200 and nonce_match
+                    approved = await browser.post(
+                        f"{request['reviewPath']}/decision",
+                        data={"nonce": nonce_match.group(1), "decision": "approve"},
+                    )
+                    assert approved.status_code == 303
+
+                submitted = await execute_client.call_tool(
+                    "execute_request", {"request_id": request["requestId"]}
+                )
+                assert not submitted.isError
+                result = result_data(submitted)
+                assert result["state"] == "submitted"
+                job_id = result["result"]["id"]
+                assert "projectId" not in result["result"]
+                assert "projectRevision" not in result["result"]
+                await speech.wait()
+
+            async with mcp_session(application, READ_TOKEN) as reader:
+                completed = await reader.call_tool("get_job", {"kind": "speech", "job_id": job_id})
+                assert not completed.isError
+                job = result_data(completed)
+                assert job["status"] == "completed"
+                assert job["sentences"][0]["text"] == text
+                assert "projectId" not in job and "projectRevision" not in job
+
+        asset_id = job["sentences"][0]["assetId"]
+        asset = speech.assets.match(
+            asset_id,
+            SpeechSentence("transient-1", text),
+            project_services.provider.fingerprint_for_voice(VOICE),
+            VOICE,
+        )
+        assert asset.project_id is None and asset.document_id is None
+        assert project_services.store.speech_asset(asset_id) is None
+        after_attempts = project_services.store.attempts(saved["id"])
+        assert after_attempts == before_attempts
+        after = project_services.store.get(saved["id"])
+        assert after["revision"] == before["revision"]
+        assert after["snapshot"] == before["snapshot"]
+        assert len(project_services.provider.calls) == 1
+        saved_asset = project_services.assets.match(
+            saved_audio_id,
+            SpeechSentence("sentence-001", "Saved project dialogue."),
+            project_services.provider.fingerprint_for_voice(VOICE),
+            VOICE,
+            saved["id"],
+            saved_snapshot["documentId"],
+        )
+        assert saved_asset.project_id == saved["id"]
+        assert not speech.gate.busy
+        await application.state.control.close()
+        await speech.close()
+        await project_services.video.close()
 
     asyncio.run(scenario())

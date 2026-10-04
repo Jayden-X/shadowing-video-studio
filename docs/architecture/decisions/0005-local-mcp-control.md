@@ -9,8 +9,10 @@ in local environment, and human review of every frozen speech/video request.
 
 ## Context
 
-Task005 reserved shared UI/CLI/MCP application commands. Task008 is developed separately;
-project/history storage and frontend synchronization cannot be assumed here. Speech and
+Task005 reserved shared UI/CLI/MCP application commands. The owner supplied Task008
+initial branch `feature/008-project-history` at commit `902bb3a` as the integration base.
+Its project/history store remains supported; MCP binding to saved projects and editor
+synchronization are deferred without changing Task008 production behavior. Speech and
 video already share a single-heavy-job gate in the FastAPI process. A second job service
 would break this boundary and volatile asset lookup.
 
@@ -50,5 +52,7 @@ does not select Task008's persistence, project identities or restart recovery fo
 
 Clients need Streamable HTTP plus configurable Authorization headers. Multiple workers,
 proxies and remote access are unsupported. Local trusted processes are not isolated from
-the human browser approval surface. Durable approval, project synchronization and replay
+the human browser approval surface; HTTP/GUI-capable processes can automate that
+separate surface under the trusted-user model. The guarantee is no MCP approval tool or
+nonce, not process isolation. Durable approval, project synchronization and replay
 need explicit follow-up contracts after Task008; no automatic restart execution is added.

@@ -34,7 +34,8 @@ directly. Review does not launch generation; approved requests require explicit 
 
 - [ ] Official SDK client connects and discovers schemas over local Streamable HTTP.
 - [ ] Disabled/unauthorized/nonlocal connections fail; read-only mutations fail.
-- [ ] AI cannot approve itself using tool inputs; local review escapes user content.
+- [ ] MCP tools expose neither approval operations nor approval nonces; local review
+  escapes user content under the documented trusted-local-user boundary.
 - [ ] Changed inputs require a new ID/review; stale configuration cannot use old approval.
 - [ ] Concurrent/repeated execution submits at most once in a service session.
 - [ ] Existing media services validate exact bindings, preserve files and expose progress.
@@ -77,3 +78,8 @@ contracts and project-history guide have been inspected. This branch is the dock
 target; MCP project tools and durable request binding remain reserved. Task013 must
 preserve the saved-project store, revision conflicts, trusted media registration and
 explicit restart recovery. ADR 0005 records MCP; ADR 0004 belongs to Task008 persistence.
+
+The MCP branch is based on the supplied Task008 initial commit `902bb3a`. Existing
+project storage/restore remains supported; only MCP binding is deferred. This task
+does not modify Task008 production storage behavior. Review guarantees exclude
+isolation from trusted local processes with separate HTTP/browser access.
