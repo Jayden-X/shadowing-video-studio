@@ -101,15 +101,14 @@ validation rejects mismatched audio even if a client submits its old asset ID.
 This checks bindings, file boundaries and recorded content hash. The shared `HeavyJobGate`
 must also coordinate future video rendering; it is not a cross-process lock.
 
-Job/cache/asset bindings are volatile. Service restart loses lookup metadata; prior WAVs
-remain on disk and are not rediscovered as trustworthy assets. Browser refresh loses the
-document/selection. A durable project/history format is deferred. Ordinary CI uses fakes
-and tiny temporary WAVs; it never installs Qwen or downloads weights.
+Task008 adds durable project-scoped bindings in SQLite under `SPEECH_WORKSPACE/state`.
+Reopening a saved project restores only validated audio with exact document/sentence/text,
+voice and current configuration fingerprints. Missing or altered files are unavailable;
+restore performs no inference. Successfully registered partial audio survives interruption.
+Older unregistered WAVs stay on disk without automatic binding reconstruction.
+Ordinary CI uses fakes and tiny temporary WAVs; it never installs Qwen or downloads weights.
+See [project storage and recovery](project-history.md) and [ADR 0004](../architecture/decisions/0004-project-history-persistence.md).
 
-The owner consolidated validated reuse across restart into P3
-[Task 008](../../tasks/backlog/008-project-history-persistence.md), covering project/history
-save and recovery with frontend association hints and trusted backend metadata/file
-validation. This remains planned work; the restart behavior described above still applies.
 P2 supported-voice selection is tracked in
 [Task 010](../../tasks/done/010-tts-voice-selection.md).
 

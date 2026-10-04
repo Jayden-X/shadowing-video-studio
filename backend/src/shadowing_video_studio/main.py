@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -5,6 +6,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from shadowing_video_studio.frontend_serving import configure_frontend
+from shadowing_video_studio.project_api import create_project_service
+from shadowing_video_studio.project_api import router as project_router
 from shadowing_video_studio.speech_api import create_speech_service
 from shadowing_video_studio.speech_api import router as speech_router
 from shadowing_video_studio.text_api import router as text_router
@@ -16,7 +19,8 @@ from shadowing_video_studio.visual_api import router as visual_router
 
 @asynccontextmanager
 async def lifespan(application: FastAPI):
-    application.state.speech = create_speech_service()
+    application.state.projects = await asyncio.to_thread(create_project_service)
+    application.state.speech = create_speech_service(application.state.projects.assets)
     application.state.visuals = create_visual_service()
     application.state.video = create_video_service(
         application.state.speech, visuals=application.state.visuals.library
@@ -37,6 +41,7 @@ app.include_router(text_router)
 app.include_router(speech_router)
 app.include_router(video_router)
 app.include_router(visual_router)
+app.include_router(project_router)
 configure_frontend(app)
 
 
@@ -44,15 +49,19 @@ configure_frontend(app)
 async def invalid_request(request: Request, _error: RequestValidationError) -> JSONResponse:
     # Pydantic's default validation response echoes submitted values, including private source.
     detail = (
-        "Invalid visual request."
-        if request.url.path.startswith("/api/visuals/")
+        "Invalid project request."
+        if request.url.path.startswith("/api/projects")
         else (
-            "Invalid video request."
-            if request.url.path.startswith("/api/video/")
+            "Invalid visual request."
+            if request.url.path.startswith("/api/visuals/")
             else (
-                "Invalid speech request."
-                if request.url.path.startswith("/api/speech/")
-                else "Invalid text preparation request."
+                "Invalid video request."
+                if request.url.path.startswith("/api/video/")
+                else (
+                    "Invalid speech request."
+                    if request.url.path.startswith("/api/speech/")
+                    else "Invalid text preparation request."
+                )
             )
         )
     )

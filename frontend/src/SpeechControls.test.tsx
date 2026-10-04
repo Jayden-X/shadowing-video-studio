@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
+import { createProjectApiTestServer, TEST_PROJECT_ID } from "./projectApiTestServer";
 
 const jobId = "a".repeat(32);
 const firstAsset = "b".repeat(32);
@@ -27,15 +28,16 @@ function json(value: unknown, status = 200) { return new Response(JSON.stringify
 function mockSpeech(create: (snapshot: Snapshot, force: boolean, init: RequestInit | undefined, binding: typeof defaultBinding) => Response | Promise<Response>,
   poll: (init: RequestInit | undefined) => Response | Promise<Response> = () => json({}),
   capabilityResponse: CapabilityFixture = capabilities) {
+  const projectServer = createProjectApiTestServer();
   const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+    const storageResponse = projectServer.handleStorage(url, init);
+    if (storageResponse) return storageResponse;
     if (url === "/api/speech/status") return json({ available: true, reason: null, voice: "Aiden", model: "Qwen3-TTS-12Hz-0.6B-CustomVoice", backend: "cpu" });
     if (url === "/api/speech/capabilities") return json(capabilityResponse);
     if (url === "/api/video/status") return json({ available: true, reason: null });
     if (url === "/api/text/providers") return json({ providers: ["codex", "deepseek"].map((id) => ({ id, label: id, available: false, reason: "unavailable" })) });
-    if (url === "/api/speech/jobs") {
-      const body = JSON.parse(init?.body as string) as { sentences: Snapshot; force: boolean } & typeof defaultBinding;
-      return create(body.sentences, body.force, init, { voice: body.voice, configurationFingerprint: body.configurationFingerprint });
-    }
+    const projectSpeech = await projectServer.submitSpeech(url, init, create);
+    if (projectSpeech) return projectSpeech;
     if (url === `/api/speech/jobs/${jobId}`) return poll(init);
     return json({ status: "ok" });
   });
@@ -50,7 +52,11 @@ async function prepare(source = "Hello. Next.") {
   fireEvent.click(button("Prepare sentences"));
 }
 function previews() { return document.querySelectorAll("audio"); }
-afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.useRealTimers();
+  window.localStorage.removeItem("shadowing-video-studio.project-cache.v1");
+});
 
 describe("sentence speech UI", () => {
   it("requires explicit generation, previews success and regenerates one frozen sentence", async () => {
@@ -58,7 +64,7 @@ describe("sentence speech UI", () => {
     render(<App />);
     await prepare();
     expect(previews()).toHaveLength(0);
-    expect(fetchMock.mock.calls.filter(([url]) => url === "/api/speech/jobs")).toHaveLength(0);
+    expect(fetchMock.mock.calls.filter(([url]) => url === `/api/projects/${TEST_PROJECT_ID}/speech`)).toHaveLength(0);
     await act(async () => { fireEvent.click(button("Generate speech")); });
     expect(previews()).toHaveLength(2);
     expect(previews()[0].getAttribute("src")).toBe(`/api/speech/assets/${firstAsset}`);
@@ -67,8 +73,10 @@ describe("sentence speech UI", () => {
     await act(async () => { fireEvent.click(button("Regenerate speech for sentence 1")); });
     expect(previews()[0].getAttribute("src")).toBe(`/api/speech/assets/${nextAsset}`);
     expect(previews()[1].getAttribute("src")).toBe(`/api/speech/assets/${firstAsset}`);
-    const posts = fetchMock.mock.calls.filter(([url]) => url === "/api/speech/jobs");
-    expect(JSON.parse(posts[1][1]?.body as string)).toEqual({ sentences: [{ id: "sentence-001", text: "Hello." }], force: true, ...defaultBinding });
+    const posts = fetchMock.mock.calls.filter(([url]) => url === `/api/projects/${TEST_PROJECT_ID}/speech`);
+    const regeneration = JSON.parse(posts[1][1]?.body as string) as Record<string, unknown>;
+    expect(regeneration).toMatchObject({ singleSentenceId: "sentence-001", configurationFingerprint: defaultBinding.configurationFingerprint,
+      expectedRevision: 1, name: "Untitled project" });
     expect(sentence(1).value).toBe("Hello.");
   });
   it("shows reused audio and invalidates edited, merged, deleted, and replaced content", async () => {
@@ -105,16 +113,16 @@ describe("sentence speech UI", () => {
     await act(async () => { fireEvent.click(button("Generate speech")); });
     expect(previews()).toHaveLength(1);
 
-    const speechCallsBeforeSelection = fetchMock.mock.calls.filter(([url]) => url === "/api/speech/jobs").length;
+    const speechCallsBeforeSelection = fetchMock.mock.calls.filter(([url]) => url === `/api/projects/${TEST_PROJECT_ID}/speech`).length;
     fireEvent.change(voiceSelect, { target: { value: alternateBinding.voice } });
-    expect(fetchMock.mock.calls.filter(([url]) => url === "/api/speech/jobs")).toHaveLength(speechCallsBeforeSelection);
+    expect(fetchMock.mock.calls.filter(([url]) => url === `/api/projects/${TEST_PROJECT_ID}/speech`)).toHaveLength(speechCallsBeforeSelection);
     expect(previews()).toHaveLength(0);
-    expect(screen.getByText(/Audio uses Aiden voice/)).toBeTruthy();
+    expect(screen.getByText(/Saved audio uses Aiden voice/)).toBeTruthy();
     expect(button("Generate video").disabled).toBe(true);
     await act(async () => { fireEvent.click(button("Generate speech")); });
     expect(previews()[0].getAttribute("src")).toBe(`/api/speech/assets/${nextAsset}`);
-    const alternatePost = JSON.parse(fetchMock.mock.calls.filter(([url]) => url === "/api/speech/jobs")[1][1]?.body as string) as Record<string, unknown>;
-    expect(alternatePost).toMatchObject(alternateBinding);
+    const alternatePost = JSON.parse(fetchMock.mock.calls.filter(([url]) => url === `/api/projects/${TEST_PROJECT_ID}/speech`)[1][1]?.body as string) as Record<string, unknown>;
+    expect(alternatePost).toMatchObject({ configurationFingerprint: alternateBinding.configurationFingerprint });
 
     fireEvent.change(voiceSelect, { target: { value: "Aiden" } });
     expect(previews()).toHaveLength(0);
@@ -133,7 +141,7 @@ describe("sentence speech UI", () => {
     expect(button("Generate speech").disabled).toBe(true);
     fireEvent.change(voiceSelect, { target: { value: alternateBinding.voice } });
     expect(button("Generate speech").disabled).toBe(false);
-    expect(fetchMock.mock.calls.filter(([url]) => url === "/api/speech/jobs")).toHaveLength(0);
+    expect(fetchMock.mock.calls.filter(([url]) => url === `/api/projects/${TEST_PROJECT_ID}/speech`)).toHaveLength(0);
   });
   it("preserves partial success and hides raw provider errors", async () => {
     mockSpeech((snapshot) => json(job(snapshot, "failed"), 202));
@@ -158,7 +166,7 @@ describe("sentence speech UI", () => {
     expect(button("Add sentence").disabled).toBe(true);
     expect(button("Prepare sentences").disabled).toBe(true);
     expect(screen.getByText("Generating this sentence…")).toBeTruthy();
-    expect(fetchMock.mock.calls.filter(([url]) => url === "/api/speech/jobs")).toHaveLength(1);
+    expect(fetchMock.mock.calls.filter(([url]) => url === `/api/projects/${TEST_PROJECT_ID}/speech`)).toHaveLength(1);
     await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
     expect(previews()).toHaveLength(2);
     expect(sentence(1).disabled).toBe(false);
@@ -193,7 +201,7 @@ describe("sentence speech UI", () => {
     await act(async () => { fireEvent.click(button("Resume speech monitoring")); });
     expect(previews()).toHaveLength(0);
     expect(sentence(1).value).toBe("New document.");
-    expect(fetchMock.mock.calls.filter(([url]) => url === "/api/speech/jobs")).toHaveLength(1);
+    expect(fetchMock.mock.calls.filter(([url]) => url === `/api/projects/${TEST_PROJECT_ID}/speech`)).toHaveLength(1);
     expect(button("Generate speech").disabled).toBe(false);
   });
   it("keeps old audio on regeneration failure and explains playback failure", async () => {
@@ -257,19 +265,22 @@ describe("sentence speech UI", () => {
     expect(sentence(1).disabled).toBe(false);
     expect(sentence(1).value).toBe("Hello.");
   });
-  it("recovers from a service restart instead of resuming a missing job forever", async () => {
+  it("clears an interrupted job when the service reports a restart failure", async () => {
     vi.useFakeTimers();
-    mockSpeech((snapshot) => json(job(snapshot, "running"), 202), () => json({ detail: "gone" }, 404));
+    let snapshot: Snapshot = [];
+    mockSpeech((sentences) => { snapshot = sentences; return json(job(sentences, "running"), 202); }, () => json({
+      ...job(snapshot, "failed"), error: "Speech interrupted by a service restart. Successful audio is preserved.",
+    }));
     render(<App />);
     await prepare();
     await act(async () => { fireEvent.click(button("Generate speech")); });
     await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
-    expect(screen.getByRole("alert").textContent).toContain("service restart");
+    expect(screen.getByRole("alert").textContent).toContain("Check the local runtime, then retry");
     expect(screen.queryByRole("button", { name: "Resume speech monitoring" })).toBeNull();
     expect(button("Generate speech").disabled).toBe(false);
     expect(sentence(1).value).toBe("Hello.");
   });
-  it("stops an unconfirmed submission and ignores its late result", async () => {
+  it("keeps an unconfirmed project submission resumable and ignores its late result", async () => {
     let resolve!: (response: Response) => void;
     let snapshot: Snapshot = [];
     let signal: AbortSignal | null | undefined;
@@ -283,9 +294,9 @@ describe("sentence speech UI", () => {
     await act(async () => { fireEvent.click(button("Generate speech")); });
     fireEvent.click(button("Stop waiting for speech"));
     expect(signal?.aborted).toBe(true);
-    expect(screen.getByText(/submission could not be confirmed/)).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Resume speech monitoring" })).toBeNull();
-    expect(button("Generate speech").disabled).toBe(false);
+    expect(screen.getByText(/does not cancel generation/)).toBeTruthy();
+    expect(button("Resume speech monitoring")).toBeTruthy();
+    expect(button("Generate speech").disabled).toBe(true);
     await act(async () => { resolve(json(job(snapshot), 202)); });
     expect(previews()).toHaveLength(0);
   });

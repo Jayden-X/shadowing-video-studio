@@ -86,22 +86,18 @@ FFmpeg may be used internally, but higher layers should not build command string
 
 ### 5. Local project persistence
 
-Persist enough state to avoid losing successfully generated sentence audio/results.
+[ADR 0004](decisions/0004-project-history-persistence.md) selects standard-library SQLite
+metadata under `SPEECH_WORKSPACE/state/projects.sqlite3`, separate from immutable media.
+Project commands atomically save a revision and freeze an execution attempt before heavy
+work. Media bytes are validated and flushed before registration; only then is success exposed.
+Successful partial speech and historical video associations survive restart. Unfinished
+attempts become interrupted and never resume automatically.
 
-The full project/audio/history format is not selected yet. The visual resource library
-uses immutable image files and version-1 JSON sidecars under the existing media workspace,
-as defined in [ADR 0003](decisions/0003-local-visual-library.md). Image IDs cross the API;
-filesystem paths remain inside the adapter. Future image producers use the same validated
-registration boundary. This does not make speech/export lookup metadata durable.
-
-Keep persistent project metadata separate from large generated media where practical.
-
-The owner consolidated project/history preservation and restart audio reuse into
-[Task008](../../tasks/backlog/008-project-history-persistence.md). One saved-project recovery
-workflow restores source, stable sentence identities, visual/voice choices and trusted
-media/history associations. Backend metadata is authoritative; frontend cache keys are
-optional reopening hints. The task remains backlog pending the persistence ADR and save
-semantics; no storage format or job-resume mechanism is selected by this consolidation.
+Saved editor snapshots retain document-scoped sentence identities, original/current text,
+voice and visual selections. Browser cache holds optional association hints; backend metadata
+and byte validation are authoritative. Exact current bindings govern audio reuse, while
+historical MP4s retain their own frozen inputs. Existing visual JSON sidecars remain unchanged
+under [ADR 0003](decisions/0003-local-visual-library.md). No legacy media import or pruning occurs.
 
 ### 6. Future task execution and control
 

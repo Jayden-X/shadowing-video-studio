@@ -1,4 +1,5 @@
 import { speechInputProblem, type SpeechBinding } from "./domain/speech";
+import type { ProjectSnapshot } from "./projectApi";
 
 export type VideoSentence = { id: string; text: string; assetId: string; illustrationAssetId?: string | null };
 export type VideoStatus = { available: boolean; reason: string | null };
@@ -10,6 +11,20 @@ export type VideoJob = {
   assetId: string | null;
   durationSeconds: number | null;
   error: string | null;
+};
+export type ProjectVideoJob = VideoJob & {
+  projectId: string;
+  documentId: string;
+  projectRevision: number;
+  submissionToken: string;
+};
+export type ProjectVideoCommand = {
+  projectId: string;
+  documentId: string;
+  expectedRevision: number;
+  name: string;
+  snapshot: ProjectSnapshot;
+  submissionToken: string;
 };
 export class VideoApiError extends Error {
   constructor(message: string, readonly status?: number) { super(message); }
@@ -58,8 +73,11 @@ export async function getVideoStatus(signal?: AbortSignal): Promise<VideoStatus>
   if (!isRecord(value) || !exactKeys(value, ["available", "reason"]) || typeof value.available !== "boolean" || !isSafeError(value.reason)) throw new VideoApiError(INVALID);
   return { available: value.available, reason: value.available ? null : UNAVAILABLE };
 }
-function validateJob(value: unknown, total: number, expectedId?: string): VideoJob {
-  if (!isRecord(value) || !exactKeys(value, ["id", "status", "completedSentences", "totalSentences", "assetId", "durationSeconds", "error"])
+function validateJob(value: unknown, total: number, expectedId?: string, projectCommand?: ProjectVideoCommand): VideoJob | ProjectVideoJob {
+  const expectedKeys = projectCommand
+    ? ["id", "status", "completedSentences", "totalSentences", "assetId", "durationSeconds", "error", "projectId", "documentId", "projectRevision", "submissionToken"]
+    : ["id", "status", "completedSentences", "totalSentences", "assetId", "durationSeconds", "error"];
+  if (!isRecord(value) || !exactKeys(value, expectedKeys)
     || typeof value.id !== "string" || !opaqueId.test(value.id) || (expectedId !== undefined && value.id !== expectedId)
     || (value.status !== "queued" && value.status !== "running" && value.status !== "completed" && value.status !== "failed")
     || value.totalSentences !== total || typeof value.completedSentences !== "number" || !Number.isInteger(value.completedSentences)
@@ -72,8 +90,16 @@ function validateJob(value: unknown, total: number, expectedId?: string): VideoJ
     if (value.assetId !== null || value.durationSeconds !== null) throw new VideoApiError(INVALID);
     if (value.status === "failed" ? value.error === null : value.error !== null) throw new VideoApiError(INVALID);
   }
-  return { id: value.id, status: value.status, completedSentences: value.completedSentences, totalSentences: total,
+  const job: VideoJob = { id: value.id, status: value.status, completedSentences: value.completedSentences, totalSentences: total,
     assetId: value.assetId, durationSeconds: value.durationSeconds, error: value.error === null ? null : FAILED };
+  if (projectCommand) {
+    if (value.projectId !== projectCommand.projectId || value.documentId !== projectCommand.documentId
+      || !Number.isSafeInteger(value.projectRevision) || (value.projectRevision as number) < projectCommand.expectedRevision
+      || value.submissionToken !== projectCommand.submissionToken) throw new VideoApiError(INVALID);
+    return { ...job, projectId: projectCommand.projectId, documentId: projectCommand.documentId,
+      projectRevision: value.projectRevision as number, submissionToken: projectCommand.submissionToken };
+  }
+  return job;
 }
 export async function createVideoJob(
   sentences: readonly VideoSentence[],
@@ -106,6 +132,36 @@ export async function createVideoJob(
     }), signal,
   }), sentences.length);
 }
+
+export async function createProjectVideoJob(
+  sentences: readonly VideoSentence[],
+  binding: SpeechBinding,
+  command: ProjectVideoCommand,
+  signal?: AbortSignal,
+): Promise<ProjectVideoJob> {
+  const problem = speechInputProblem(sentences);
+  if (problem) throw new VideoApiError(problem);
+  if (sentences.some((sentence) => !opaqueId.test(sentence.assetId))) throw new VideoApiError("Every sentence needs current generated audio before rendering video.");
+  if (!binding.voice.trim() || !fingerprint.test(binding.configurationFingerprint)) throw new VideoApiError("Choose a currently supported speech voice before rendering video.");
+  if (sentences.some((sentence) => sentence.illustrationAssetId != null && !opaqueId.test(sentence.illustrationAssetId))
+    || (command.snapshot.backgroundAssetId != null && !opaqueId.test(command.snapshot.backgroundAssetId))) {
+    throw new VideoApiError("Every selected image must have a valid local asset.");
+  }
+  const audioAssetIds = Object.fromEntries(sentences.map((sentence) => [sentence.id, sentence.assetId]));
+  const value = await requestJson(`/api/projects/${command.projectId}/video`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      operationToken: command.submissionToken,
+      expectedRevision: command.expectedRevision,
+      name: command.name,
+      snapshot: command.snapshot,
+      configurationFingerprint: binding.configurationFingerprint,
+      audioAssetIds,
+    }), signal,
+  });
+  return validateJob(value, sentences.length, undefined, command) as ProjectVideoJob;
+}
+
 export async function getVideoJob(id: string, total: number, signal?: AbortSignal): Promise<VideoJob> {
   if (!opaqueId.test(id)) throw new VideoApiError(INVALID);
   return validateJob(await requestJson(`/api/video/jobs/${id}`, { signal }), total, id);

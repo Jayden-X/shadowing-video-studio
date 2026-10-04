@@ -6,7 +6,9 @@ import type { useSpeech } from "./useSpeech";
 
 type SpeechState = ReturnType<typeof useSpeech>;
 
-export function SpeechControls({ speech, sentences, locked }: { speech: SpeechState; sentences: readonly SentenceItem[]; locked: boolean }) {
+export function SpeechControls({ speech, sentences, locked, onGenerate }: {
+  speech: SpeechState; sentences: readonly SentenceItem[]; locked: boolean; onGenerate?: () => void;
+}) {
   const problem = speechInputProblem(sentences);
   const readyCount = sentences.filter((sentence) => currentSentenceAudio(sentence, speech.selection, speech.binding)).length;
   const capabilities = speech.capabilities;
@@ -20,7 +22,7 @@ export function SpeechControls({ speech, sentences, locked }: { speech: SpeechSt
       <div className="speech-heading">
         <div><h3 id="speech-title">Sentence speech</h3><p className="field-help">Local {capabilities?.model ?? "TTS"} · {capabilities?.language ?? "English"}</p></div>
         <button type="button" className="primary-button" disabled={locked || speech.outstanding || speech.checking || !speech.readiness?.available || !capabilities?.available || !speech.binding || !!problem}
-          onClick={() => { void speech.generate(sentences); }}>Generate speech</button>
+          onClick={() => { if (onGenerate) onGenerate(); else void speech.generate(sentences); }}>Generate speech</button>
       </div>
       <p className="field-help">Review the sentence list, then generate speech explicitly. Unchanged successful audio is reused.</p>
       {speech.checking ? <p className="field-help">Checking local speech runtime…</p>
@@ -30,6 +32,8 @@ export function SpeechControls({ speech, sentences, locked }: { speech: SpeechSt
         <select id="speech-voice" value={speech.selectedVoice} disabled={locked || speech.outstanding || speech.checking || !capabilities?.available || !capabilities || capabilities.voices.length === 0}
           onChange={(event) => speech.chooseVoice(event.target.value)}>
           <option value="">Choose a supported voice</option>
+          {speech.selectedVoice && !capabilities?.voices.some((voice) => voice.id === speech.selectedVoice)
+            && <option value={speech.selectedVoice}>{speech.selectedVoice} · Saved voice unavailable</option>}
           {capabilities?.voices.map((voice) => <option key={voice.id} value={voice.id}>{voice.label}</option>)}
         </select>
         {!speech.checking && !unavailableReason && !speech.binding && <p className="field-help">Select a supported voice before generating speech.</p>}
@@ -57,9 +61,10 @@ export function SentenceSpeech({ sentence, position, selection, job, binding, di
   const progress = job && binding && job.voice === binding.voice && job.configurationFingerprint === binding.configurationFingerprint
     ? job.sentences.find((item) => item.id === sentence.id && item.text === sentence.text) : undefined;
   const [playbackError, setPlaybackError] = useState(false);
-  useEffect(() => { setPlaybackError(false); }, [audio?.assetId]);
   const mismatch = sentenceAudioMismatch(sentence, selection, binding);
   const priorAudio = Object.hasOwn(selection, sentence.id) ? selection[sentence.id] : undefined;
+  const playableAudio = audio;
+  useEffect(() => { setPlaybackError(false); }, [playableAudio?.assetId]);
   return (
     <div className="sentence-speech" role="group" aria-label={`Speech for sentence ${position}`}>
       <p className="field-help">
@@ -68,12 +73,12 @@ export function SentenceSpeech({ sentence, position, selection, job, binding, di
           : progress?.status === "failed" ? progress.error
           : audio ? `Audio ready · ${audio.durationSeconds.toFixed(1)} seconds${audio.reused ? " · Reused" : ""}`
           : mismatch === "text" ? "Text changed. Generate speech again before preview or video."
-          : mismatch === "voice" ? `Audio uses ${priorAudio?.voice ?? "another"} voice. Select that voice or generate speech for the selected voice before preview or video.`
-          : mismatch === "configuration" ? "Speech configuration changed. Generate speech again before preview or video."
+          : mismatch === "voice" ? `Saved audio uses ${priorAudio?.voice ?? "another"} voice. Generate speech with the selected voice before video.`
+          : mismatch === "configuration" ? "Saved audio uses an earlier speech configuration. Generate speech again before video."
           : "No current audio. Generate speech after reviewing this sentence."}
       </p>
-      {audio && <audio key={audio.assetId} controls preload="none" aria-label={`Preview sentence ${position}`}
-        src={speechAssetUrl(audio.assetId)} onError={() => setPlaybackError(true)} />}
+      {playableAudio && <audio key={playableAudio.assetId} controls preload="none" aria-label={`Preview sentence ${position}`}
+        src={speechAssetUrl(playableAudio.assetId)} onError={() => setPlaybackError(true)} />}
       {playbackError && <p className="input-error" role="alert">This audio could not be played. Check the local service; regenerate after a service restart.</p>}
       <button type="button" disabled={disabled || !binding || !!speechInputProblem([sentence])} aria-label={`Regenerate speech for sentence ${position}`}
         onClick={regenerate}>Regenerate speech</button>

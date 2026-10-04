@@ -36,19 +36,23 @@ Text preparation has two modes:
 
 **DeepSeek** and the **Codex CLI** sit behind a replaceable provider abstraction. See [provider setup](docs/development/setup.md#environment-configuration). Credentials remain in the backend/local CLI, and AI preparation is limited to 20,000 source characters.
 
-The manual editor works without the backend, AI, TTS, or FFmpeg. Splitting uses simple punctuation/newline rules; abbreviations and decimals may need manual correction. Work is held in the current browser session and is lost on refresh or closing the tab.
+The manual editor works without the backend, AI, TTS, or FFmpeg. Splitting uses simple punctuation/newline rules; abbreviations and decimals may need manual correction. Unsaved drafts remain in the current browser session. Save a named project to restore it after refresh or service restart; subsequent edits autosave after two seconds.
 
 ### Sentence speech
 
 With the local Qwen runtime configured, select a document voice and explicitly choose **Generate speech** after reviewing the sentence list. The application uses the validated CPU/0.6B CustomVoice path with English and Aiden as the default when supported. Available voices come from the configured local model; selecting one does not run inference. Jobs freeze the selected voice and configuration, show per-sentence progress, and provide native audio previews and single-sentence regeneration. Unchanged successful audio with the same voice/configuration is reused; editing text or switching voices makes mismatched audio ineligible. Earlier WAVs are preserved. Replacing a document clears its current audio selections.
 
-Generation locks editing while the UI waits. **Stop waiting for speech** ends monitoring without cancelling the local generation job; a known job can be monitored again. Jobs are serialized by the service. Speech accepts up to 100 sentences, 4,000 characters each, and 20,000 total characters. Metadata is volatile: after a service restart, generate again. Generated WAV files are kept locally and are never overwritten by regeneration. See [runtime setup](docs/development/setup.md).
+Generation locks editing while the UI waits. **Stop waiting for speech** ends monitoring without cancelling the local generation job; a known job can be monitored again. Jobs are serialized by the service. Speech accepts up to 100 sentences, 4,000 characters each, and 20,000 total characters. Project-bound audio metadata is durable: reopening a saved project restores matching, validated WAVs without inference. Legacy audio generated before project saving remains on disk without recoverable bindings. Generated WAV files are kept locally and are never overwritten by regeneration. See [runtime setup](docs/development/setup.md).
 
 ### Video export
 
 After reviewing the current sentence audio, explicitly choose **Generate video**. The fixed 1920 × 1080 template shows one sentence per page, a reserved visual area, 36 black rounded frequency bars below the text, and a five-second silent practice pause after every sentence. The bars react to speech and disappear during silence. The default background is light blue; choose a light uploaded background for clear black bars. Sentences without matching current audio are ineligible; text that cannot fit a page must be split and its speech generated again.
 
-Rendering shows progress and locks editing while the UI waits. **Stop waiting for video** ends monitoring without cancelling rendering; a known job can be monitored again. Preview completed exports with native video controls and download MP4 files. Repeated exports retain prior outputs. Download before restarting the service: export links and job metadata are volatile, while generated files remain locally preserved. Development uses Vite; the target Mac run can use the same local FastAPI service to serve the built frontend.
+Rendering shows progress and locks editing while the UI waits. **Stop waiting for video** ends monitoring without cancelling rendering; a known job can be monitored again. Preview completed exports with native video controls and download MP4 files. Repeated exports retain prior outputs. Saved projects retain immutable output history and validated MP4 preview/download links across service restarts. Earlier unregistered exports remain on disk without automatic history import. Development uses Vite; the target Mac run can use the same local FastAPI service to serve the built frontend.
+
+### Projects and history
+
+Use **Save** to register a named local project. Later edits autosave after two seconds; save status distinguishes saved, unsaved and failed changes. Open saved projects from the project selector. Generation saves and freezes its inputs before starting, and completed videos remain in output history against their original sentences, voice and images. Restore never starts generation automatically. See [project storage and recovery](docs/development/project-history.md).
 
 ### Backgrounds and illustrations
 

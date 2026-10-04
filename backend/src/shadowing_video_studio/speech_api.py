@@ -61,20 +61,23 @@ class SpeechJobRequest(BaseModel):
     configurationFingerprint: StrictStr | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
 
-def create_speech_service() -> SpeechJobs:
+def create_speech_service(assets: SpeechAssets | None = None) -> SpeechJobs:
     settings = SpeechSettings.from_environment()
-    try:
-        workspace, _ = settings.validated_paths()
-        assets = SpeechAssets(workspace)
-    except (SpeechError, OSError):
-        assets = None
+    if assets is None:
+        try:
+            workspace, _ = settings.validated_paths()
+            assets = SpeechAssets(workspace)
+        except (SpeechError, OSError):
+            assets = None
     return SpeechJobs(QwenSpeechProvider(settings, assets), assets, HeavyJobGate())
 
 
 def get_speech_service(request: Request) -> SpeechJobs:
     # Also supports lightweight clients without a lifespan context; no heavy load.
     if not hasattr(request.app.state, "speech"):
-        request.app.state.speech = create_speech_service()
+        from shadowing_video_studio.project_api import get_project_service
+
+        request.app.state.speech = create_speech_service(get_project_service(request).assets)
     return request.app.state.speech
 
 

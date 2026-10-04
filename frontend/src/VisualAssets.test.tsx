@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
+import { createProjectApiTestServer, TEST_PROJECT_ID } from "./projectApiTestServer";
 import type { VisualAsset } from "./visualApi";
 
 const speechAssetId = "b".repeat(32);
@@ -35,14 +36,19 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   window.localStorage.removeItem("shadowing-video-studio.visual-selections.v1");
+  window.localStorage.removeItem("shadowing-video-studio.project-cache.v1");
 });
 
 describe("visual asset workflow", () => {
   it("uploads and selects images, preserves sentence bindings through split/reorder, freezes them for export, and protects state on upload failure and merge", async () => {
     let registeredIllustration: VisualAsset | null = null;
     let failUpload = false;
-    let submittedVideo: { backgroundAssetId?: string; sentences: { id: string; text: string; assetId: string; illustrationAssetId?: string }[] } | null = null;
+    let submittedVideo: { voice: string; configurationFingerprint: string; backgroundAssetId?: string | null;
+      sentences: { id: string; text: string; assetId: string; illustrationAssetId?: string }[] } | null = null;
+    const projectServer = createProjectApiTestServer();
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      const storageResponse = projectServer.handleStorage(url, init);
+      if (storageResponse) return storageResponse;
       if (url === "/api/health") return json({ status: "ok" });
       if (url === "/api/text/providers") return json({ providers: availableProviders });
       if (url === "/api/visuals/status") return json(visualStatus);
@@ -60,17 +66,22 @@ describe("visual asset workflow", () => {
       if (url === "/api/speech/capabilities") return json({ available: true, reason: null, defaultVoice: "Aiden", model: "Qwen3-TTS", language: "English",
         voices: [{ id: "Aiden", label: "Aiden", configurationFingerprint: speechBinding.configurationFingerprint }] });
       if (url === "/api/video/status") return json({ available: true, reason: null });
-      if (url === "/api/speech/jobs") {
-        const body = JSON.parse(init?.body as string) as { sentences: { id: string; text: string }[] };
-        return json({ id: "a".repeat(32), status: "completed", error: null, ...speechBinding, sentences: body.sentences.map((item) => ({
-          ...item, ...speechBinding, status: "ready", assetId: speechAssetId, durationSeconds: 1.5, error: null, reused: false,
-        })) }, 202);
-      }
-      if (url === "/api/video/jobs") {
-        submittedVideo = JSON.parse(init?.body as string) as typeof submittedVideo;
-        return json({ id: "1".repeat(32), status: "completed", completedSentences: submittedVideo!.sentences.length,
-          totalSentences: submittedVideo!.sentences.length, assetId: exportId, durationSeconds: 20, error: null }, 202);
-      }
+      const projectSpeech = await projectServer.submitSpeech(url, init, (sentences) => json({
+        id: "a".repeat(32), status: "completed", error: null, ...speechBinding,
+        sentences: sentences.map((item) => ({ ...item, ...speechBinding, status: "ready", assetId: speechAssetId,
+          durationSeconds: 1.5, error: null, reused: false })),
+      }, 202));
+      if (projectSpeech) return projectSpeech;
+      const projectVideo = await projectServer.submitVideo(url, init, (sentences) => {
+        const command = JSON.parse(init?.body as string) as { snapshot: { backgroundAssetId: string | null; voice: string }; configurationFingerprint: string };
+        submittedVideo = { voice: command.snapshot.voice, configurationFingerprint: command.configurationFingerprint,
+          backgroundAssetId: command.snapshot.backgroundAssetId,
+          sentences: sentences.map(({ id, text, assetId, illustrationAssetId }) => ({ id, text, assetId,
+            ...(illustrationAssetId ? { illustrationAssetId } : {}) })) };
+        return json({ id: "1".repeat(32), status: "completed", completedSentences: sentences.length,
+          totalSentences: sentences.length, assetId: exportId, durationSeconds: 20, error: null }, 202);
+      });
+      if (projectVideo) return projectVideo;
       return json({ status: "ok" });
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -111,12 +122,15 @@ describe("visual asset workflow", () => {
         { id: "sentence-003", text: "world.", assetId: speechAssetId },
       ],
     });
-    expect(screen.getByRole("link", { name: "Download MP4" })).toBeTruthy();
+    expect(screen.getAllByRole("link", { name: "Download MP4" }).length).toBeGreaterThan(0);
 
-    const stored = JSON.parse(window.localStorage.getItem("shadowing-video-studio.visual-selections.v1") ?? "null") as Record<string, unknown>;
-    expect(stored).toEqual({ version: 1, backgroundAssetId: backgroundId,
-      illustrationsBySentence: { "sentence-001": uploadedIllustrationId, "sentence-002": existingIllustrationId } });
-    expect(JSON.stringify(stored)).not.toContain("Uploaded illustration.png");
+    const createRequest = fetchMock.mock.calls.find(([url, request]) => url === "/api/projects" && request?.method === "POST");
+    const savedProject = JSON.parse(createRequest?.[1]?.body as string) as { snapshot: { backgroundAssetId: string; illustrationsBySentence: Record<string, string> } };
+    expect(savedProject.snapshot.backgroundAssetId).toBe(backgroundId);
+    expect(savedProject.snapshot.illustrationsBySentence).toEqual({
+      "sentence-001": uploadedIllustrationId, "sentence-002": existingIllustrationId,
+    });
+    expect(window.localStorage.getItem("shadowing-video-studio.visual-selections.v1")).toBeNull();
 
     failUpload = true;
     const rejectedFile = new File(["another fixture"], "Retry after refresh.png", { type: "image/png" });
@@ -125,7 +139,7 @@ describe("visual asset workflow", () => {
     expect(imageChoice("Illustration for sentence 1").value).toBe(uploadedIllustrationId);
     expect(sentence(1).value).toBe("Hello");
     expect(document.querySelectorAll("audio")).toHaveLength(3);
-    expect(screen.getByRole("link", { name: "Download MP4" })).toBeTruthy();
+    expect(screen.getAllByRole("link", { name: "Download MP4" }).length).toBeGreaterThan(0);
     expect(screen.queryByText(/private workspace path/)).toBeNull();
 
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
@@ -136,10 +150,8 @@ describe("visual asset workflow", () => {
     fireEvent.click(button("Merge sentence 2 with previous"));
     await waitFor(() => expect(sentence(1).value).toBe("Hello Next."));
     expect(imageChoice("Illustration for sentence 1").value).toBe(uploadedIllustrationId);
-    const afterMerge = JSON.parse(window.localStorage.getItem("shadowing-video-studio.visual-selections.v1") ?? "null") as {
-      illustrationsBySentence: Record<string, string>;
-    };
-    expect(afterMerge.illustrationsBySentence).toEqual({ "sentence-001": uploadedIllustrationId });
+    fireEvent.click(button("Save"));
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url, request]) => url === `/api/projects/${TEST_PROJECT_ID}` && request?.method === "PUT")).toBe(true));
 
     registeredIllustration = {
       id: uploadedIllustrationId, kind: "illustration", name: "Uploaded illustration.png", mimeType: "image/png",
@@ -155,18 +167,14 @@ describe("visual asset workflow", () => {
     await waitFor(() => expect(screen.queryByText(/Image file is missing/)).toBeNull());
 
     app.unmount();
-    registeredIllustration = null;
+    registeredIllustration = { ...registeredIllustration, available: true, reason: null };
     render(<App />);
     await screen.findByRole("option", { name: /Morning background\.png/ });
-    const persisted = JSON.parse(window.localStorage.getItem("shadowing-video-studio.visual-selections.v1") ?? "null") as {
-      backgroundAssetId: string;
-      illustrationsBySentence: Record<string, string>;
-    };
-    expect(persisted.backgroundAssetId).toBe(backgroundId);
-    expect(persisted.illustrationsBySentence).toEqual({ "sentence-001": uploadedIllustrationId });
-    fireEvent.change(screen.getByRole("textbox", { name: "Source dialogue" }), { target: { value: "Hello world. Next." } });
-    fireEvent.click(button("Prepare sentences"));
+    expect(imageChoice("Background image").value).toBe("");
+    fireEvent.change(imageChoice("Open project"), { target: { value: TEST_PROJECT_ID } });
+    await waitFor(() => expect(imageChoice("Background image").value).toBe(backgroundId));
     expect(imageChoice("Background image").value).toBe(backgroundId);
-    expect(imageChoice("Illustration for sentence 1").value).toBe("");
+    expect(imageChoice("Illustration for sentence 1").value).toBe(uploadedIllustrationId);
+    expect(imageChoice("Illustration for sentence 2").value).toBe("");
   });
 });

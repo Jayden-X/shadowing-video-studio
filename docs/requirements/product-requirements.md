@@ -201,12 +201,26 @@ interaction can inform this selector's UI; supported voices are provider capabil
   explicit recovery/regeneration. Save triggers, frontend cache and backend project/history
   formats require a design decision before implementation; large media stays outside Git.
 
-See the unified [Task 008](../../tasks/backlog/008-project-history-persistence.md).
+See the unified [Task 008](../../tasks/done/008-project-history-persistence.md).
+
+### P3 — Explicit local project/resource cleanup
+
+The owner confirmed three deletion modes on 2026-10-04:
+
+1. Delete the project only, retaining intermediate resources and final outputs.
+2. Delete the project and intermediate resources, retaining final outputs.
+3. Delete the project and all related resources, including final outputs.
+
+Show and confirm the deletion scope. Protect unrelated/shared resources; this does not
+mean deleting the entire media workspace or shared image library. Resource classification,
+retained-file discovery, metadata/reference lifecycle and failure recovery require a
+separate design decision. Task008 does not implement deletion or automatic pruning.
+See [Task014](../../tasks/backlog/014-project-resource-cleanup.md).
 
 ## Open decisions
 
 - Concrete application stack and packaging strategy.
-- Exact project/history persistence model.
+- Project/resource deletion lifecycle (project/history persistence is selected in ADR0004).
 - Which non-default voices are exposed in MVP.
 - Which simple style controls are exposed.
 - Exact cancellation/resume behavior.

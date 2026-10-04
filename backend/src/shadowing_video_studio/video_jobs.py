@@ -12,9 +12,11 @@ from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 
+from shadowing_video_studio.project_commands import ProjectCommand, attempt_job
+from shadowing_video_studio.project_store import ProjectError
 from shadowing_video_studio.providers.ffmpeg import FfmpegVideoRenderer
 from shadowing_video_studio.speech import VOICE, SpeechError, SpeechSentence
-from shadowing_video_studio.speech_assets import OPAQUE_ID, SpeechAsset
+from shadowing_video_studio.speech_assets import OPAQUE_ID, SpeechAsset, flush_media
 from shadowing_video_studio.speech_jobs import SpeechJobs, validate_sentences
 from shadowing_video_studio.video_rendering import (
     MAX_VIDEO_ASSET_BYTES,
@@ -182,7 +184,10 @@ class VideoJobs:
         background_asset_id: str | None = None,
         voice: str = VOICE,
         configuration_fingerprint: str | None = None,
+        project: ProjectCommand | None = None,
     ) -> dict:
+        if project and (replay := await project.replay()) is not None:
+            return deepcopy(self._jobs.get(replay["id"], replay))
         selections = tuple(selections)
         if self._closed:
             raise VideoJobError("Video service is stopping. Restart before submitting work.", 503)
@@ -197,12 +202,20 @@ class VideoJobs:
         if not self.speech.assets:
             raise VideoJobError("Configure speech and generate the current sentences first.", 503)
         fingerprint = await self.speech.resolve_voice(voice, configuration_fingerprint)
-        matched: tuple[SpeechAsset, ...] = tuple(
-            self.speech.assets.match(
-                item.asset_id, SpeechSentence(item.id, item.text), fingerprint, voice
+        matched_list = []
+        for item in selections:
+            matched_list.append(
+                await asyncio.to_thread(
+                    self.speech.assets.match,
+                    item.asset_id,
+                    SpeechSentence(item.id, item.text),
+                    fingerprint,
+                    voice,
+                    project.project_id if project else None,
+                    project.snapshot["documentId"] if project else None,
+                )
             )
-            for item in selections
-        )
+        matched: tuple[SpeechAsset, ...] = tuple(matched_list)
         if any(asset.voice != voice for asset in matched):
             raise VideoJobError(
                 "Audio does not match the selected voice. Generate speech again.", 409
@@ -260,6 +273,44 @@ class VideoJobs:
                 - visual_bytes,
                 supports_text_shaping=self._tool_preflight.supports_text_shaping,
             )
+            attempt = None
+            if project:
+                attempt = await project.freeze(
+                    {
+                        "audio": [
+                            {
+                                "id": asset.id,
+                                "sentenceId": asset.sentence_id,
+                                "sha256": asset.sha256,
+                                "sizeBytes": asset.size_bytes,
+                                "durationSeconds": asset.duration_seconds,
+                            }
+                            for asset in matched
+                        ],
+                        "visuals": [
+                            {
+                                "id": asset.id,
+                                "sha256": asset.sha256,
+                                "sizeBytes": asset.size_bytes,
+                                "mimeType": asset.mime_type,
+                            }
+                            for asset, _ in visual_inputs.values()
+                        ],
+                        "render": {
+                            "template": "frequency-bars-v1",
+                            "width": 1920,
+                            "height": 1080,
+                            "frameRate": 30,
+                            "pauseSeconds": 5,
+                            "videoCodec": "h264",
+                            "audioCodec": "aac",
+                        },
+                    }
+                )
+                self.gate.release(job_id)
+                job_id = attempt["id"]
+                if not self.gate.claim(job_id):
+                    raise VideoJobError("A local media job is already running.", 409)
             workspace = self.speech.assets.workspace
             parent = checked_directory(workspace / "video", workspace)
             parent.mkdir(mode=0o700, exist_ok=True)
@@ -277,6 +328,14 @@ class VideoJobs:
                 "durationSeconds": None,
                 "error": None,
             }
+            if attempt:
+                job.update(
+                    projectId=attempt["projectId"],
+                    documentId=attempt["documentId"],
+                    projectRevision=attempt["revision"],
+                    submissionToken=project.submission_token,
+                )
+                await asyncio.to_thread(project.store.update_attempt, job_id, "running", job)
             self._jobs[job_id] = job
             self._task = asyncio.create_task(
                 self._run(
@@ -287,6 +346,7 @@ class VideoJobs:
                     tuple(item.illustration_asset_id for item in selections),
                     background_asset_id,
                     visual_inputs,
+                    project,
                 )
             )
             return deepcopy(job)
@@ -308,6 +368,7 @@ class VideoJobs:
         illustration_ids: tuple[str | None, ...],
         background_id: str | None,
         visual_inputs: dict[str, tuple[FrozenVisualAsset, bytes]],
+        project: ProjectCommand | None = None,
     ) -> None:
         job["status"] = "running"
         try:
@@ -364,14 +425,30 @@ class VideoJobs:
             )
             if asset.id in self._assets:
                 raise VideoJobError("Could not register a unique video asset. Retry the export.")
-            self._assets[asset.id] = asset
-            self._reserved_bytes -= MAX_VIDEO_JOB_BYTES - stored
-            job.update(
+            updated = deepcopy(job)
+            updated.update(
                 status="completed",
                 completedSentences=job["totalSentences"],
                 assetId=asset.id,
                 durationSeconds=asset.duration_seconds,
             )
+            if project:
+                await asyncio.to_thread(flush_media, asset.path)
+                await asyncio.to_thread(
+                    project.store.record_video,
+                    job["id"],
+                    {
+                        "id": asset.id,
+                        "jobId": job["id"],
+                        "sha256": asset.sha256,
+                        "sizeBytes": asset.size_bytes,
+                        "durationSeconds": asset.duration_seconds,
+                    },
+                    updated,
+                )
+            self._assets[asset.id] = asset
+            self._reserved_bytes -= MAX_VIDEO_JOB_BYTES - stored
+            job.update(updated)
         except asyncio.CancelledError:
             job.update(
                 status="failed",
@@ -384,6 +461,8 @@ class VideoJobs:
             job.update(status="failed", error=exc.detail)
         except VideoJobError as exc:
             job.update(status="failed", error=exc.detail)
+        except ProjectError as exc:
+            job.update(status="failed", error=exc.detail)
         except Exception:
             job.update(
                 status="failed",
@@ -391,6 +470,11 @@ class VideoJobs:
                 "retry the export.",
             )
         finally:
+            if project and job["status"] != "completed":
+                try:
+                    await asyncio.to_thread(project.store.update_attempt, job["id"], "failed", job)
+                except ProjectError:
+                    job["error"] = "Could not save the final task state. Earlier exports remain."
             try:
                 if job["status"] != "completed":
                     # All renderer processes have stopped before this boundary.
@@ -459,13 +543,42 @@ class VideoJobs:
             raise VideoJobError("The video asset is no longer available.", 404)
 
     def get(self, job_id: str) -> dict:
-        if not OPAQUE_ID.fullmatch(job_id) or job_id not in self._jobs:
+        if not OPAQUE_ID.fullmatch(job_id):
             raise VideoJobError("Video job not found in this service session.", 404)
-        return deepcopy(self._jobs[job_id])
+        if job_id in self._jobs:
+            return deepcopy(self._jobs[job_id])
+        store = self.speech.assets.store if self.speech.assets else None
+        if store:
+            try:
+                attempt = store.get_attempt(job_id)
+                if attempt and attempt["kind"] == "video":
+                    return attempt_job(attempt)
+            except ProjectError as exc:
+                raise VideoJobError(exc.detail, exc.status_code) from exc
+        raise VideoJobError("Video job not found.", 404)
 
     def asset(self, asset_id: str) -> VideoAsset:
-        if not OPAQUE_ID.fullmatch(asset_id) or asset_id not in self._assets:
+        if not OPAQUE_ID.fullmatch(asset_id):
             raise VideoJobError("Video asset not found in this service session.", 404)
+        if asset_id not in self._assets:
+            store = self.speech.assets.store if self.speech.assets else None
+            try:
+                record = store.video_asset(asset_id) if store else None
+            except ProjectError as exc:
+                raise VideoJobError(exc.detail, exc.status_code) from exc
+            if not record:
+                raise VideoJobError("Video asset not found.", 404)
+            job_id = record["jobId"]
+            if not OPAQUE_ID.fullmatch(job_id) or not self.speech.assets:
+                raise VideoJobError("The saved video registration is invalid.", 404)
+            self._assets[asset_id] = VideoAsset(
+                asset_id,
+                job_id,
+                self.speech.assets.workspace / "video" / job_id / "render" / "video.mp4",
+                record["sizeBytes"],
+                record["sha256"],
+                record["durationSeconds"],
+            )
         asset = self._assets[asset_id]
         try:
             self._checked_asset_path(asset.path, asset.job_id)

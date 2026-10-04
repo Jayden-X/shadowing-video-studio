@@ -1,7 +1,6 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import type { SentenceId } from "./domain/sentences";
 
-const STORAGE_KEY = "shadowing-video-studio.visual-selections.v1";
 const assetIdPattern = /^[a-f0-9]{32}$/;
 const sentenceIdPattern = /^sentence-\d+$/;
 
@@ -34,33 +33,11 @@ export function parseVisualSelections(value: unknown): VisualSelections {
   return { backgroundAssetId, illustrationsBySentence };
 }
 
-export function loadVisualSelections(): VisualSelections {
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    return raw === null ? emptySelections() : parseVisualSelections(JSON.parse(raw) as unknown);
-  } catch {
-    return emptySelections();
-  }
-}
-
-function persistVisualSelections(selections: VisualSelections): boolean {
-  try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ version: 1, ...selections }));
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 export function useVisualSelections() {
-  const [selections, setSelections] = useState(loadVisualSelections);
-  const [storageWarning, setStorageWarning] = useState("");
-
-  useEffect(() => {
-    setStorageWarning(persistVisualSelections(selections)
-      ? ""
-      : "The browser could not save image selections. They will remain only until this tab closes.");
-  }, [selections]);
+  // Project state is restored only from the backend snapshot. The prior browser-wide
+  // selection cache has no project/document identity and is not safe to apply here.
+  const [selections, setSelections] = useState<VisualSelections>(emptySelections);
+  const storageWarning = "";
 
   function setBackgroundAssetId(backgroundAssetId: string | null) {
     setSelections((current) => ({ ...current, backgroundAssetId }));
@@ -79,6 +56,13 @@ export function useVisualSelections() {
     setSelections((current) => ({ ...current, illustrationsBySentence: {} }));
   }
 
+  function replaceSelections(next: VisualSelections) {
+    setSelections({
+      backgroundAssetId: next.backgroundAssetId,
+      illustrationsBySentence: { ...next.illustrationsBySentence },
+    });
+  }
+
   function removeSentenceIllustration(sentenceId: SentenceId) {
     setSelections((current) => {
       if (!Object.hasOwn(current.illustrationsBySentence, sentenceId)) return current;
@@ -93,6 +77,7 @@ export function useVisualSelections() {
     storageWarning,
     setBackgroundAssetId,
     setSentenceIllustration,
+    replaceSelections,
     clearSentenceIllustrations,
     removeSentenceIllustration,
   };

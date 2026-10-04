@@ -5,6 +5,8 @@ import uuid
 from copy import deepcopy
 from typing import Any
 
+from shadowing_video_studio.project_commands import ProjectCommand, attempt_job
+from shadowing_video_studio.project_store import ProjectError
 from shadowing_video_studio.speech import (
     MAX_SESSION_JOBS,
     MAX_SPEECH_SENTENCES,
@@ -18,7 +20,8 @@ from shadowing_video_studio.speech import (
     SpeechReadiness,
     SpeechSentence,
 )
-from shadowing_video_studio.speech_assets import OPAQUE_ID, SpeechAssets
+from shadowing_video_studio.speech_assets import OPAQUE_ID, SpeechAssets, flush_media
+from shadowing_video_studio.speech_settings import MAX_NEW_TOKENS, MODEL_REVISION
 from shadowing_video_studio.text_processing import text_length
 
 
@@ -94,7 +97,10 @@ class SpeechJobs:
         force: bool = False,
         voice: str = VOICE,
         configuration_fingerprint: str | None = None,
+        project: ProjectCommand | None = None,
     ) -> dict:
+        if project and (replay := await project.replay()) is not None:
+            return deepcopy(self._jobs.get(replay["id"], replay))
         sentences = list(sentences)
         validate_sentences(sentences, force)
         if self._closed:
@@ -113,11 +119,16 @@ class SpeechJobs:
                 "This service session has reached its job limit. Restart to continue.", 409
             )
         for sentence in sentences:
-            asset = (
-                self.assets.reusable(sentence, fingerprint, voice)
-                if self.assets and not force
-                else None
-            )
+            asset = None
+            if self.assets and not force:
+                asset = await asyncio.to_thread(
+                    self.assets.reusable,
+                    sentence,
+                    fingerprint,
+                    voice,
+                    project.project_id if project else None,
+                    project.snapshot["documentId"] if project else None,
+                )
             rows.append(
                 {
                     "id": sentence.id,
@@ -131,6 +142,8 @@ class SpeechJobs:
                     "reused": asset is not None,
                 }
             )
+        if self._closed or len(self._jobs) >= MAX_SESSION_JOBS:
+            raise SpeechError("Speech service is stopping or has reached its job limit.", 503)
         job_id = uuid.uuid4().hex
         needs_work = any(row["status"] != "ready" for row in rows)
         if needs_work and not self.gate.claim(job_id):
@@ -140,6 +153,34 @@ class SpeechJobs:
             # another await so shutdown/capacity cannot change after gate claim.
             if needs_work and self.assets is None:
                 raise SpeechError("Configure speech before generating audio.", 503)
+            attempt = (
+                await project.freeze(
+                    {
+                        "speech": {
+                            "fingerprint": fingerprint,
+                            "fingerprintVersion": "qwen-cpu-v2",
+                            "normalizationVersion": "exact-v1",
+                            "modelRevision": MODEL_REVISION,
+                            "voice": voice,
+                            "language": "English",
+                            "backend": "cpu",
+                            "dtype": "float32",
+                            "attention": "eager",
+                            "qwenTts": "0.1.1",
+                            "maxNewTokens": MAX_NEW_TOKENS,
+                        },
+                    }
+                )
+                if project
+                else None
+            )
+            if attempt:
+                previous_owner = job_id
+                job_id = attempt["id"]
+                if needs_work:
+                    self.gate.release(previous_owner)
+                    if not self.gate.claim(job_id):
+                        raise SpeechError("A local media job is already running.", 409)
             job = {
                 "id": job_id,
                 "voice": voice,
@@ -148,51 +189,87 @@ class SpeechJobs:
                 "sentences": rows,
                 "error": None,
             }
+            if attempt:
+                job.update(
+                    projectId=attempt["projectId"],
+                    documentId=attempt["documentId"],
+                    projectRevision=attempt["revision"],
+                    submissionToken=project.submission_token,
+                )
+                await asyncio.to_thread(
+                    project.store.update_attempt,
+                    job_id,
+                    "running" if needs_work else "completed",
+                    job,
+                )
             self._jobs[job_id] = job
             if needs_work:
-                self._task = asyncio.create_task(self._run(job, fingerprint, voice))
+                self._task = asyncio.create_task(self._run(job, fingerprint, voice, project))
             return deepcopy(job)
         except BaseException:
             if needs_work:
                 self.gate.release(job_id)
             raise
 
-    async def _run(self, job: dict, fingerprint: str, voice: str) -> None:
+    async def _run(
+        self, job: dict, fingerprint: str, voice: str, project: ProjectCommand | None = None
+    ) -> None:
         job["status"] = "running"
         try:
             assert self.assets is not None
-            for row in job["sentences"]:
+            for index in range(len(job["sentences"])):
+                row = job["sentences"][index]
                 if row["status"] == "ready":
                     continue
                 row["status"] = "generating"
                 try:
                     asset_id, destination = self.assets.allocate()
                     await self.provider.generate(row["text"], destination, voice)
-                    asset = self.assets.register(
+                    asset = await asyncio.to_thread(
+                        self.assets.register,
                         asset_id,
                         SpeechSentence(row["id"], row["text"]),
                         fingerprint,
                         destination,
                         voice,
+                        project.project_id if project else None,
+                        project.snapshot["documentId"] if project else None,
                     )
-                    row.update(
+                    updated = deepcopy(job)
+                    updated["sentences"][index].update(
                         status="ready", assetId=asset.id, durationSeconds=asset.duration_seconds
                     )
+                    if project:
+                        if all(r["status"] in {"ready", "failed"} for r in updated["sentences"]):
+                            self._finish(updated)
+                        await asyncio.to_thread(flush_media, asset.path)
+                        await asyncio.to_thread(
+                            project.store.record_speech,
+                            job["id"],
+                            {
+                                "id": asset.id,
+                                "sessionId": asset.path.parent.name,
+                                "sentenceId": asset.sentence_id,
+                                "text": asset.text,
+                                "fingerprint": asset.fingerprint,
+                                "voice": asset.voice,
+                                "durationSeconds": asset.duration_seconds,
+                                "sizeBytes": asset.size_bytes,
+                                "sha256": asset.sha256,
+                            },
+                            updated,
+                        )
+                    job.update(updated)
                 except SpeechError as exc:
+                    row.update(status="failed", error=exc.detail)
+                except ProjectError as exc:
                     row.update(status="failed", error=exc.detail)
                 except Exception:
                     row.update(
                         status="failed",
                         error="Speech generation failed. Check the runtime and try again.",
                     )
-            if any(row["status"] == "failed" for row in job["sentences"]):
-                job.update(
-                    status="failed",
-                    error="Some sentences failed. Successful audio is preserved; "
-                    "retry the failed sentences.",
-                )
-            else:
-                job["status"] = "completed"
+            self._finish(job)
         except asyncio.CancelledError:
             self._fail_remaining(job, "The speech service stopped. Successful audio is preserved.")
             raise
@@ -201,7 +278,26 @@ class SpeechJobs:
                 job, "Speech generation could not continue. Successful audio is preserved."
             )
         finally:
+            if project and job["status"] != "completed":
+                try:
+                    await asyncio.to_thread(project.store.update_attempt, job["id"], "failed", job)
+                except ProjectError:
+                    job["error"] = (
+                        "Could not save the final task state. Earlier saved audio remains."
+                    )
             self.gate.release(job["id"])
+
+    @staticmethod
+    def _finish(job: dict) -> None:
+        if any(row["status"] == "failed" for row in job["sentences"]):
+            job.update(
+                status="failed",
+                error=(
+                    "Some sentences failed. Successful audio is preserved; retry failed sentences."
+                ),
+            )
+        else:
+            job.update(status="completed", error=None)
 
     @staticmethod
     def _fail_remaining(job: dict, detail: str) -> None:
@@ -211,9 +307,19 @@ class SpeechJobs:
         job.update(status="failed", error=detail)
 
     def get(self, job_id: str) -> dict:
-        if not OPAQUE_ID.fullmatch(job_id) or job_id not in self._jobs:
+        if not OPAQUE_ID.fullmatch(job_id):
             raise SpeechError("Speech job not found in this service session.", 404)
-        return deepcopy(self._jobs[job_id])
+        if job_id in self._jobs:
+            return deepcopy(self._jobs[job_id])
+        store = self.assets.store if self.assets else None
+        if store:
+            try:
+                attempt = store.get_attempt(job_id)
+                if attempt and attempt["kind"] == "speech":
+                    return attempt_job(attempt)
+            except ProjectError as exc:
+                raise SpeechError(exc.detail, exc.status_code) from exc
+        raise SpeechError("Speech job not found.", 404)
 
     async def wait(self) -> None:
         if self._task:

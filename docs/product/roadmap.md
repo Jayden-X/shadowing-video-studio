@@ -49,7 +49,8 @@ the corresponding task is ready and any required design decisions are confirmed.
 | --- | --- | --- |
 | P2 | UI upload, local folder library and selection of video backgrounds / sentence illustrations | [009](../../tasks/done/009-local-visual-library.md) |
 | P2 | UI list and selection of voices supported by the local TTS runtime | [010](../../tasks/done/010-tts-voice-selection.md) |
-| P3 | Local project/history save and recovery, including audio reuse and previous outputs after restart | [008](../../tasks/backlog/008-project-history-persistence.md) |
+| P3 | Local project/history save and recovery, including audio reuse and previous outputs after restart (accepted) | [008](../../tasks/done/008-project-history-persistence.md) |
+| P3 | Explicit project deletion: project only / intermediate cleanup / all related resources including final outputs | [014](../../tasks/backlog/014-project-resource-cleanup.md) |
 
 AI illustration generation is a future producer seam within Task 009's design; it is not
 included in that task's initial implementation. Product behavior is defined in
