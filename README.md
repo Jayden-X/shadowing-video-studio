@@ -63,6 +63,17 @@ inside the right panel and remain visible during speech and the five-second paus
 Video generation freezes the selected images alongside its sentence/audio inputs.
 See [local visual library](docs/development/visual-library.md) for limits and editing rules.
 
+## Local AI control through MCP
+
+An optional local MCP endpoint can discover capabilities, prepare sentence drafts, and
+request reviewed speech/video generation using the same backend services as the UI.
+It is disabled by default; read and execute access use distinct local credentials.
+Each frozen generation request requires human confirmation on the backend's `/control`
+page before the AI explicitly executes it. Service-session requests do not save projects
+or synchronize the browser editor. Their project/history binding remains a follow-up
+against the initial `feature/008-project-history` implementation.
+See [MCP setup and tool contracts](docs/development/mcp-control.md).
+
 ## Technology stack
 
 - Backend: Python 3.12 + FastAPI.
@@ -111,7 +122,7 @@ Start here:
 1. Read [AGENTS.md](AGENTS.md).
 2. Read [Product requirements](docs/requirements/product-requirements.md).
 3. Read [Architecture overview](docs/architecture/overview.md).
-4. Pick only a task from [tasks/ready](tasks/ready).
+4. Pick only a ready task according to the [task workflow](tasks/README.md).
 5. Follow [AI development workflow](docs/development/ai-development.md).
 6. Satisfy every acceptance criterion and validation step before moving the task forward.
 

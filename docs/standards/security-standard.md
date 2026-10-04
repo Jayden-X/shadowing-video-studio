@@ -48,6 +48,17 @@ Before sending content to an external provider:
 - credentials remain local
 - failures must not destroy the original source data
 
+## Control adapter boundaries
+
+Keep human-review secrets outside AI protocol tools: do not return approval nonces,
+accept a tool-supplied approval flag, or expose a tool that approves its own generation
+request. State the trusted-local-process boundary explicitly; a browser nonce is not
+isolation from another process owned by the same Mac user.
+
+Sanitize errors at the protocol boundary as well as inside handlers. SDK input-validation
+failures may echo submitted dialogue before a handler runs; return a safe input error
+instead of forwarding those diagnostics.
+
 ## Filesystem safety
 
 Generated output and temporary files must use known application-controlled locations.
