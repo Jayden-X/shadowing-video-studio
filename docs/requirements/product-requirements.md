@@ -75,6 +75,11 @@ See [future task and control seams](../architecture/future-task-control.md) for 
 - One sentence per page.
 - Default shadowing pause: 5 seconds after each sentence.
 - Layout: large English text on the left; visual/character area on the right; dynamic waveform at the bottom.
+- Waveform style: 36 black rounded frequency bars below the left text area, on a transparent
+  layer without a backplate. Heights follow frequency energy and speech volume at 30 fps;
+  silence (including the practice pause) hides the bars. The default background is light blue
+  with dark text. Uploaded backgrounds retain their existing dim layer; light backgrounds
+  are recommended for black-bar contrast.
 - TTS: Qwen3-TTS.
 - Default voice: Aiden.
 - Voice cloning is not part of the current default.

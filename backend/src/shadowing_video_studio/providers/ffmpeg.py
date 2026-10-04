@@ -7,11 +7,12 @@ import math
 import os
 import re
 import struct
-from collections.abc import Mapping, Sequence
+from collections.abc import AsyncIterable, Mapping, Sequence
 from pathlib import Path
 from typing import Protocol
 
 from shadowing_video_studio.providers.process import ProcessResult, SubprocessRunner
+from shadowing_video_studio.providers.spectrum import waveform_frames
 from shadowing_video_studio.text_processing import PreparationError
 from shadowing_video_studio.video_rendering import (
     FRAME_RATE,
@@ -55,6 +56,7 @@ class MediaProcessRunner(Protocol):
         cwd: Path,
         environment: Mapping[str, str],
         timeout: float,
+        source_stream: AsyncIterable[bytes] | None = None,
     ) -> ProcessResult: ...
 
 
@@ -180,7 +182,7 @@ def page_arguments(
     audio_graph = (
         f"[0:a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=mono,"
         f"apad=pad_dur=5,apad=whole_dur={duration},atrim=duration={duration},"
-        "asetpts=PTS-STARTPTS,asplit=2[voice][waveinput];"
+        "asetpts=PTS-STARTPTS[voice];"
     )
     image_arguments: list[str] = []
     # Decode a single raster, then repeat the scaled frame a finite number of times.
@@ -215,12 +217,9 @@ def page_arguments(
         "format=yuv420p,"
         f"loop=loop={page.frame_count - 1}:size=1:start=0,setpts=N/(30*TB)[background];"
         if background_filename is not None
-        else f"color=c=0x101b2d:s=1920x1080:r=30:d={duration}[background];"
+        else f"color=c=0x9dd7f5:s=1920x1080:r=30:d={duration}[background];"
     )
-    panel_graph = (
-        "[background]drawbox=x=1240:y=92:w=584:h=736:color=0x20334c:t=fill,"
-        "drawbox=x=96:y=852:w=1728:h=184:color=0x182a40:t=fill"
-    )
+    panel_graph = "[background]drawbox=x=1240:y=92:w=584:h=736:color=0x20334c:t=fill"
     if illustration_filename is not None:
         illustration_index = 2 if background_filename is not None else 1
         panel_graph += (
@@ -234,16 +233,19 @@ def page_arguments(
         )
     else:
         panel_graph += ","
+    waveform_index = (
+        1 + int(background_filename is not None) + int(illustration_filename is not None)
+    )
+    font_color = "white" if background_filename is not None else "0x173b59"
     graph = (
         audio_graph
         + background_graph
         + panel_graph
         + f"drawtext=fontfile=font.ttf:textfile={stem}.txt:expansion=none:"
-        f"fontsize={layout.font_size}:fontcolor=white:x=96:y=96:"
+        f"fontsize={layout.font_size}:fontcolor={font_color}:x=96:y=96:"
         f"line_spacing=16{shaping_option}[base];"
-        "[waveinput]showwaves=s=1728x144:mode=line:rate=30:colors=0x4fbcff:"
-        "scale=sqrt:draw=full,fps=30[wave];"
-        "[base][wave]overlay=x=96:y=876:eof_action=pass:repeatlast=0,"
+        f"[{waveform_index}:v]setpts=N/(30*TB),format=rgba[wave];"
+        "[base][wave]overlay=x=0:y=850:eof_action=pass:repeatlast=0,"
         "format=yuv420p[video]"
     )
     return [
@@ -260,6 +262,18 @@ def page_arguments(
         "-i",
         f"audio-{index:04d}.wav",
         *image_arguments,
+        "-protocol_whitelist",
+        "pipe",
+        "-f",
+        "image2pipe",
+        "-framerate",
+        str(FRAME_RATE),
+        "-threads",
+        "1",
+        "-c:v",
+        "png",
+        "-i",
+        "pipe:0",
         "-filter_complex_threads",
         "1",
         "-filter_complex",
@@ -322,6 +336,10 @@ def concat_arguments(
         "0:a:0",
         "-c:v",
         "copy",
+        # Stream-copy muxing must use the same grid as setts. Some FFmpeg builds
+        # otherwise retain the MKV millisecond clock and compress video timestamps.
+        "-r",
+        str(FRAME_RATE),
         "-bsf:v",
         f"setts=pts=round(PTS*TB*{FRAME_RATE}):dts=round(DTS*TB*{FRAME_RATE}):"
         f"duration=1:time_base=1/{FRAME_RATE}",
@@ -481,7 +499,13 @@ class FfmpegVideoRenderer:
         self.output_budget_bytes = output_budget_bytes
         self.supports_text_shaping = supports_text_shaping
 
-    async def _execute(self, arguments: Sequence[str], directory: Path) -> bytes:
+    async def _execute(
+        self,
+        arguments: Sequence[str],
+        directory: Path,
+        *,
+        source_stream: AsyncIterable[bytes] | None = None,
+    ) -> bytes:
         environment = {
             "PATH": os.defpath,
             "LANG": "C",
@@ -490,8 +514,9 @@ class FfmpegVideoRenderer:
             "TMPDIR": str(directory),
             "XDG_CACHE_HOME": str(directory),
         }
+        input_options = {"source_stream": source_stream} if source_stream is not None else {}
         result = await self.runner.run(
-            arguments, cwd=directory, environment=environment, timeout=self.timeout
+            arguments, cwd=directory, environment=environment, timeout=self.timeout, **input_options
         )
         if result.returncode:
             if "-fs" in arguments:
@@ -685,6 +710,9 @@ class FfmpegVideoRenderer:
                     else None,
                 ),
                 directory,
+                source_stream=waveform_frames(
+                    directory / f"audio-{index:04d}.wav", page.frame_count
+                ),
             )
             page_output = _regular_path(directory / f"page-{index:04d}.mkv")
             page_size = page_output.stat().st_size

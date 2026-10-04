@@ -174,6 +174,24 @@ def test_real_process_success_preserves_stdin(tmp_path):
     assert result.returncode == 0 and result.stdout == b"exact source"
 
 
+def test_real_process_accepts_bounded_async_stdin_chunks(tmp_path):
+    async def scenario():
+        async def source():
+            yield b"first "
+            yield b"second"
+
+        return await SubprocessRunner().run(
+            [sys.executable, "-c", "import sys; sys.stdout.buffer.write(sys.stdin.buffer.read())"],
+            cwd=tmp_path,
+            environment=dict(os.environ),
+            timeout=5,
+            source_stream=source(),
+        )
+
+    result = asyncio.run(scenario())
+    assert result.returncode == 0 and result.stdout == b"first second"
+
+
 def test_real_exited_parent_cannot_leave_child_holding_pipes(tmp_path, monkeypatch):
     # Parent exits successfully while a child retains both inherited output pipes.
     child_file = tmp_path / "child.pid"

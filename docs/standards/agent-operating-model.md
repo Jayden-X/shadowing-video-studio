@@ -66,7 +66,8 @@ Create follow-up tasks for useful but non-essential work.
 ## Multi-agent coordination
 
 The owner's current model choice is **GPT-6 Luna with max reasoning** for frontend
-implementation and code-review subagents. Preserve existing work when handing off; record
+implementation, focused unit-test work and backend code-review subagents. Preserve existing
+work when handing off; record
 the reviewed scope and actual validation. If that model is unavailable, surface the
 limitation rather than silently substituting another model for these tasks.
 

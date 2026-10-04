@@ -29,6 +29,8 @@ from shadowing_video_studio.video_rendering import (
 )
 from shadowing_video_studio.video_settings import (
     REQUIRED_BITSTREAM_FILTERS,
+    REQUIRED_DECODERS,
+    REQUIRED_DEMUXERS,
     REQUIRED_DRAWTEXT_OPTIONS,
     REQUIRED_ENCODERS,
     REQUIRED_FILTERS,
@@ -42,6 +44,7 @@ from shadowing_video_studio.visual_assets import VisualAsset, VisualAssetError
 class FakeCapabilityRunner:
     def __init__(self):
         self.missing_drawtext = False
+        self.missing_capability: str | None = None
         self.supports_text_shaping = True
         self.calls = []
 
@@ -66,10 +69,14 @@ class FakeCapabilityRunner:
             "-filters": ("...", REQUIRED_FILTERS),
             "-encoders": ("V.....", REQUIRED_ENCODERS),
             "-muxers": ("E", REQUIRED_MUXERS),
+            "-decoders": ("V.....", REQUIRED_DECODERS),
+            "-demuxers": ("D", REQUIRED_DEMUXERS),
         }
         flags, names = options[arguments[-1]]
         if arguments[-1] == "-filters" and self.missing_drawtext:
             names = names - {"drawtext"}
+        if self.missing_capability in names:
+            names = names - {self.missing_capability}
         return ProcessResult(0, "\n".join(f" {flags} {name} synthetic" for name in names).encode())
 
 
@@ -188,6 +195,30 @@ def test_missing_drawtext_blocks_readiness_and_submit_before_media_work(tmp_path
                 runner.missing_drawtext = True
                 assert not (await client.get("/api/video/status")).json()["available"]
                 assert len(runner.calls) > calls
+        finally:
+            await service.close()
+            await service.speech.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("capability", "reason"), [("png", "decoders"), ("image2pipe", "demuxers")]
+)
+def test_missing_png_input_support_blocks_video_submission(tmp_path, capability, reason):
+    async def scenario():
+        service, renderer, rows = fixture_service(tmp_path)
+        runner = service._tool_preflight.runner
+        runner.missing_capability = capability
+        try:
+            async with client_for(service) as client:
+                status = (await client.get("/api/video/status")).json()
+                assert not status["available"] and reason in status["reason"]
+                rejected = await client.post("/api/video/jobs", json={"sentences": rows})
+                assert rejected.status_code == 503 and reason in rejected.json()["detail"]
+                assert not renderer.calls and not service.gate.busy
+                assert not (tmp_path / "video").exists()
+                assert all(service.speech.assets.read(row["assetId"]) for row in rows)
         finally:
             await service.close()
             await service.speech.close()
