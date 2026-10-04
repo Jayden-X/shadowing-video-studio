@@ -12,8 +12,9 @@ including after restarting the service. Current selections are cached in this br
 the sentence document and speech/export lookup metadata still have their existing
 session lifecycle. Missing resources show an actionable error and can be reselected.
 
-Backgrounds cover the frame and are dimmed for readable text. Illustrations fit inside
-the right panel without cropping and remain visible during that sentence and its
+Backgrounds cover the frame. Pages without an illustration have no dim layer or reserved
+right-side panel. Illustrated pages dim the background for readable text; illustrations
+fit inside the right panel without cropping and remain visible during that sentence and its
 five-second pause. Generation freezes selections; changing a selection requires a new
 export. Earlier image and video files are retained.
 

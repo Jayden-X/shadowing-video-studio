@@ -18,7 +18,8 @@ establishes the algorithm and geometry; user media remains outside Git.
   bands from 80 to 8000 Hz; band response and RMS envelope match the reference.
 - Hide bars at RMS <= 0.001, including all five-second shadowing pauses.
 - Remove the waveform backplate. Use a light-blue default background and dark default text
-  for black-bar visibility. Preserve uploaded-image layout and document its contrast limit.
+  for black-bar visibility. Pages without an illustration have neither a right-side placeholder
+  nor background dim layer; illustrated pages retain those layers. Document contrast limits.
 - Stream bounded PNG batches directly into the existing FFmpeg page process. No new runtime
   dependency, intermediate frame files, API/persistence changes or additional heavy jobs.
 - Preserve process cleanup, frozen inputs, immutable exports, timeout and storage limits.
@@ -76,3 +77,18 @@ model and covers backend production/critical code only, excluding frontend and t
   end-to-end TTS run was performed; genuine adapter/media validation reused accepted audio.
 - Owner explicitly authorized pushing the verified branch and creating a PR in
   `Jayden-X/shadowing-video-studio` on 2026-10-04. Task remains in review until integration.
+- Owner's follow-up fix removes the reserved blue panel and background dim layer on each
+  sentence without an illustration, for both speech and pause. Undimmed pages use dark
+  text; illustrated pages retain their prior panel/dimming behavior. ADR 0003 and the
+  product/runtime/library docs now reflect this explicit layout correction.
+- GPT-6 Luna/max added four compact background/illustration combination regressions.
+  Independent backend production review found no Blocker/Required findings. The full
+  repository check passed again: 200 backend tests, one Windows-only skip, 11 spike checks,
+  167 frontend tests, lint/format, typecheck/build. Existing dependencies were reused with
+  `uv run --no-sync` after lockless dependency discovery hit the sandbox's network restriction.
+- Actual mixed illustrated/unillustrated export (18.3335 s) and no-image default export
+  (9.866667 s) passed final metadata validation and full decode. The unillustrated right
+  region matched the scaled source background with mean RGB pixel error <2 during speech
+  and pause; default right RGB was (156,214,245), with no blue placeholder. The illustrated
+  page retained dimming (sample mean 77.78 versus 198.86 on the undimmed page). Evidence and
+  exports remain ignored under `artifacts/spectrum-validation/no-illustration-*`.

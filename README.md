@@ -54,8 +54,10 @@ Rendering shows progress and locks editing while the UI waits. **Stop waiting fo
 
 Upload a static PNG/JPEG/WebP background or a right-side illustration for each sentence,
 or choose an existing image from the local library. Resources retain their IDs and bytes
-after a service restart. Backgrounds cover the frame under a dim layer; illustrations fit
-inside the right panel and remain visible during speech and the five-second pause.
+after a service restart. Backgrounds cover the frame. A sentence without an illustration
+shows the background without dimming or a right-side placeholder; selected illustrations
+fit inside the right panel over a dimmed background and remain visible during speech and
+the five-second pause.
 Video generation freezes the selected images alongside its sentence/audio inputs.
 See [local visual library](docs/development/visual-library.md) for limits and editing rules.
 
