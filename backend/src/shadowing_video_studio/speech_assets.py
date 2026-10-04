@@ -1,4 +1,4 @@
-"""WAVs live in a unique session directory; only volatile metadata binds assets."""
+"""Immutable WAVs; durable registrations may resolve earlier owned sessions."""
 
 import hashlib
 import io
@@ -11,6 +11,7 @@ import wave
 from dataclasses import dataclass
 from pathlib import Path
 
+from shadowing_video_studio.project_store import ProjectError, ProjectStore
 from shadowing_video_studio.speech import (
     MAX_SESSION_BYTES,
     MAX_WAV_BYTES,
@@ -34,11 +35,14 @@ class SpeechAsset:
     size_bytes: int
     sha256: str
     voice: str = VOICE
+    project_id: str | None = None
+    document_id: str | None = None
 
 
 class SpeechAssets:
-    def __init__(self, workspace: Path) -> None:
+    def __init__(self, workspace: Path, store: ProjectStore | None = None) -> None:
         self.workspace = workspace.resolve()
+        self.store = store
         self._directory: Path | None = None
         self._assets: dict[str, SpeechAsset] = {}
         self._cache: dict[tuple[str, str, str], str] = {}
@@ -85,9 +89,20 @@ class SpeechAssets:
         self._bytes += MAX_WAV_BYTES
         return asset_id, destination
 
-    def _read_file(self, path: Path) -> bytes:
-        directory = self._session()
-        if path.parent != directory or path.is_symlink() or path.resolve() != path:
+    def _read_file(self, path: Path, *, registered: bool = False) -> bytes:
+        directory = path.parent if registered else self._session()
+        if (
+            directory.parent != self.workspace / "speech"
+            or not OPAQUE_ID.fullmatch(directory.name)
+            or not OPAQUE_ID.fullmatch(path.stem)
+            or path.suffix != ".wav"
+            or path.parent != directory
+            or any(
+                item.is_symlink() or getattr(item, "is_junction", lambda: False)()
+                for item in (path, *path.parents)
+            )
+            or path.resolve() != path
+        ):
             raise SpeechError("The audio asset is no longer available.", 404)
         descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
         with os.fdopen(descriptor, "rb") as handle:
@@ -106,6 +121,8 @@ class SpeechAssets:
         fingerprint: str,
         path: Path,
         voice: str = VOICE,
+        project_id: str | None = None,
+        document_id: str | None = None,
     ) -> SpeechAsset:
         if (
             not OPAQUE_ID.fullmatch(asset_id)
@@ -139,26 +156,77 @@ class SpeechAssets:
             len(content),
             hashlib.sha256(content).hexdigest(),
             voice,
+            project_id,
+            document_id,
         )
         self._assets[asset_id] = asset
         self._cache[(sentence.id, sentence.text, fingerprint)] = asset_id
         self._bytes -= MAX_WAV_BYTES - len(content)
         return asset
 
-    def read(self, asset_id: str) -> bytes:
-        if not OPAQUE_ID.fullmatch(asset_id) or asset_id not in self._assets:
-            raise SpeechError("Audio asset not found in this service session.", 404)
-        asset = self._assets[asset_id]
+    def _load(self, asset_id: str) -> SpeechAsset:
+        if not OPAQUE_ID.fullmatch(asset_id):
+            raise SpeechError("Audio asset not found.", 404)
+        if asset_id in self._assets:
+            return self._assets[asset_id]
         try:
-            content = self._read_file(asset.path)
-            if hashlib.sha256(content).hexdigest() != asset.sha256:
+            record = self.store.speech_asset(asset_id) if self.store else None
+        except ProjectError as exc:
+            raise SpeechError(exc.detail, exc.status_code) from exc
+        if not record:
+            raise SpeechError("Audio asset not found.", 404)
+        session_id = record["sessionId"]
+        if not OPAQUE_ID.fullmatch(session_id):
+            raise SpeechError("The saved audio registration is invalid.", 404)
+        asset = SpeechAsset(
+            asset_id,
+            record["sentenceId"],
+            record["text"],
+            record["fingerprint"],
+            record["durationSeconds"],
+            self.workspace / "speech" / session_id / f"{asset_id}.wav",
+            record["sizeBytes"],
+            record["sha256"],
+            record["voice"],
+            record["projectId"],
+            record["documentId"],
+        )
+        self._assets[asset_id] = asset
+        return asset
+
+    def read(self, asset_id: str) -> bytes:
+        asset = self._load(asset_id)
+        try:
+            content = self._read_file(asset.path, registered=True)
+            if (
+                len(content) != asset.size_bytes
+                or hashlib.sha256(content).hexdigest() != asset.sha256
+            ):
                 raise SpeechError("The audio asset changed. Generate speech again.", 404)
+            with wave.open(io.BytesIO(content), "rb") as wav:
+                frames = wav.getnframes()
+                if (
+                    wav.getnchannels() != 1
+                    or wav.getframerate() != 24000
+                    or wav.getsampwidth() != 2
+                    or wav.getcomptype() != "NONE"
+                    or not 0 < frames <= MAX_WAV_SECONDS * 24000
+                    or len(wav.readframes(frames)) != frames * 2
+                    or abs(frames / 24000 - asset.duration_seconds) > 1 / 24000
+                ):
+                    raise SpeechError("The saved audio format is invalid.", 404)
             return content
-        except OSError as exc:
+        except (OSError, wave.Error, EOFError, ValueError) as exc:
             raise SpeechError("The audio asset is no longer available.", 404) from exc
 
     def match(
-        self, asset_id: str, sentence: SpeechSentence, fingerprint: str, voice: str = VOICE
+        self,
+        asset_id: str,
+        sentence: SpeechSentence,
+        fingerprint: str,
+        voice: str = VOICE,
+        project_id: str | None = None,
+        document_id: str | None = None,
     ) -> SpeechAsset:
         """Later rendering must validate the exact frozen ID/text/config binding."""
         self.read(asset_id)
@@ -172,11 +240,38 @@ class SpeechAssets:
             raise SpeechError(
                 "Audio no longer matches the reviewed sentence. Generate it again.", 409
             )
+        if project_id is not None and (asset.project_id, asset.document_id) != (
+            project_id,
+            document_id,
+        ):
+            raise SpeechError("Audio belongs to a different project or document.", 409)
         return asset
 
     def reusable(
-        self, sentence: SpeechSentence, fingerprint: str, voice: str = VOICE
+        self,
+        sentence: SpeechSentence,
+        fingerprint: str,
+        voice: str = VOICE,
+        project_id: str | None = None,
+        document_id: str | None = None,
     ) -> SpeechAsset | None:
+        if project_id is not None:
+            if not self.store or not document_id:
+                return None
+            try:
+                records = self.store.speech_candidates(
+                    project_id, document_id, sentence.id, sentence.text, fingerprint, voice
+                )
+            except ProjectError as exc:
+                raise SpeechError(exc.detail, exc.status_code) from exc
+            for record in records:
+                try:
+                    return self.match(
+                        record["id"], sentence, fingerprint, voice, project_id, document_id
+                    )
+                except SpeechError:
+                    continue
+            return None
         asset_id = self._cache.get((sentence.id, sentence.text, fingerprint))
         if not asset_id:
             return None
@@ -184,3 +279,20 @@ class SpeechAssets:
             return self.match(asset_id, sentence, fingerprint, voice)
         except SpeechError:
             return None
+
+
+def flush_media(path: Path) -> None:
+    """The registration transaction must never precede durable media bytes."""
+    # Windows FlushFileBuffers requires a writable handle; POSIX permits read-only fsync.
+    flags = os.O_RDWR if os.name == "nt" else os.O_RDONLY
+    descriptor = os.open(path, flags | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+    if os.name != "nt":
+        descriptor = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)

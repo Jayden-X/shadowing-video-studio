@@ -3,7 +3,7 @@
 ## Priority and status
 
 - Priority: **P3** — after the accepted MVP and P2 visual/voice features.
-- Status: **backlog** — unified scope approved; persistence/save design pending.
+- Status: **in progress** — owner approved [ADR 0004](../../docs/architecture/decisions/0004-project-history-persistence.md) on 2026-10-04.
 
 ## Goal
 
@@ -97,8 +97,11 @@ Before implementation, document the required persistence ADR/owner decisions for
 - Explicit save/autosave triggers, failure feedback and atomic-write/recovery policy.
 - Minimum output-history snapshot representation and save/open UX.
 
-Scope consolidation is approved; these storage/implementation choices remain unresolved.
-Do not assume a browser cache API, database or checkpoint format.
+Scope and storage/save choices are approved under ADR 0004.
+
+[Accepted ADR 0004](../../docs/architecture/decisions/0004-project-history-persistence.md)
+selects SQLite metadata in the existing media workspace, explicit first save with later
+autosave, and project controls/output history.
 
 ## Standards affected
 
@@ -106,6 +109,24 @@ Existing architecture, security, focused-testing, documentation and delivery sta
 
 ## Implementation notes
 
-Requirements only. No persistent store/history UI/restore API/runtime change is delivered
-by consolidation. The accepted MVP's volatile document/audio/video lookup behavior remains
-until this unified task is implemented.
+Implementation started on 2026-10-04. Validation and delivery evidence will be recorded here.
+
+### Collaboration checkpoint — 2026-10-04
+
+The owner requested an early remote branch checkpoint because other tasks depend on this
+work. Branch: `feature/008-project-history`. This is an implementation checkpoint, not an
+accepted or merged delivery; dependent work should use the project-scoped API contracts
+and allow for corrective changes before final acceptance.
+
+- SQLite store, project commands/API, durable speech/video bindings and frontend
+  save/open/autosave/history integration are implemented.
+- Backend suite: **202 passed, 4 skipped** on Windows; focused new scenarios: **8 passed,
+  1 skipped**. Windows symlink tests are limited by symlink creation permissions.
+- Frontend typecheck and production build pass. Existing tests currently report **151
+  passed, 16 failed**; adapting old API/cache mocks and resolving regressions remains open.
+- Actual Mac restart/media validation, final frontend checks, PR CI and acceptance are
+  pending. No completion claim is made by this checkpoint.
+
+The owner explicitly waived code review for Task008 on 2026-10-04. The review subagent
+was interrupted. Existing checks, focused critical-path tests, CI and actual Mac validation
+remain required; this waiver does not change the repository-wide review policy.

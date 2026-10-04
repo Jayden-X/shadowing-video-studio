@@ -30,11 +30,40 @@ import {
   type SentenceDocument,
   type SentenceId,
 } from "./domain/sentences";
+import {
+  createOpaqueToken,
+  createProject,
+  getProject,
+  listProjects,
+  ProjectApiError,
+  saveProject,
+  type ProjectDetail,
+  type ProjectRecord,
+  type ProjectSnapshot,
+  type ProjectSubmissionContext,
+  type ProjectSummary,
+} from "./projectApi";
+import {
+  forgetPendingSubmission,
+  getLastProjectId,
+  pendingSubmissionsFor,
+  rememberPendingSubmission,
+  rememberProjectAssets,
+  setLastProjectId,
+} from "./projectCache";
 
 type BackendState = "checking" | "online" | "offline";
 type PreparationMode = "manual" | "ai";
 type Replacement = { kind: "manual"; source: string } | { kind: "ai"; proposal: TextProposal };
+type ProjectNavigation = { kind: "new" } | { kind: "open"; projectId: string };
+type SaveStatus = "loading" | "unsaved" | "saving" | "saved" | "failed";
+type PendingCreate = { name: string; snapshot: ProjectSnapshot; key: string; operationToken: string };
+type PendingSave = { projectId: string; name: string; snapshot: ProjectSnapshot; key: string; expectedRevision: number; operationToken: string };
 const AI_REQUEST_TIMEOUT_MS = 120_000;
+
+function projectStateKey(name: string, snapshot: ProjectSnapshot): string {
+  return JSON.stringify({ name, snapshot });
+}
 
 export default function App() {
   const speech = useSpeech();
@@ -55,6 +84,19 @@ export default function App() {
   const [proposal, setProposal] = useState<TextProposal | null>(null);
   const [aiPending, setAiPending] = useState(false);
   const [aiError, setAiError] = useState("");
+  const [documentId, setDocumentId] = useState(createOpaqueToken);
+  const [project, setProject] = useState<ProjectRecord | null>(null);
+  const [projectDetail, setProjectDetail] = useState<ProjectDetail | null>(null);
+  const [projects, setProjects] = useState<ProjectSummary[]>([]);
+  const [projectName, setProjectName] = useState("Untitled project");
+  const [projectLoadState, setProjectLoadState] = useState<BackendState>("checking");
+  const [projectError, setProjectError] = useState("");
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>("loading");
+  const [saveError, setSaveError] = useState("");
+  const [workspaceReady, setWorkspaceReady] = useState(false);
+  const [generationPreparing, setGenerationPreparing] = useState(false);
+  const [pendingNavigation, setPendingNavigation] = useState<ProjectNavigation | null>(null);
+  const [lastProjectId, setLastProjectIdState] = useState<string | null>(getLastProjectId);
   const sentenceInputs = useRef(new Map<SentenceId, HTMLTextAreaElement>());
   const prepareButton = useRef<HTMLButtonElement>(null);
   const applyButton = useRef<HTMLButtonElement>(null);
@@ -64,6 +106,350 @@ export default function App() {
   const activeRequest = useRef<AbortController | null>(null);
   const requestSequence = useRef(0);
   const requestTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const activeProject = useRef<ProjectRecord | null>(null);
+  const detailRef = useRef<ProjectDetail | null>(null);
+  const snapshotRef = useRef<ProjectSnapshot | null>(null);
+  const projectNameRef = useRef(projectName);
+  const lastAcknowledgedKey = useRef<string | null>(null);
+  const pendingCreate = useRef<PendingCreate | null>(null);
+  const pendingSave = useRef<PendingSave | null>(null);
+  const saveQueue = useRef<Promise<unknown> | null>(null);
+  const autosaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const projectLoadSequence = useRef(0);
+  const hydrating = useRef(false);
+  const latestSnapshot = {
+    version: 1 as const,
+    documentId,
+    sourceDraft,
+    document: sentenceDocument,
+    hasPrepared,
+    mode,
+    voice: speech.selectedVoice || speech.capabilities?.defaultVoice || "Aiden",
+    backgroundAssetId,
+    illustrationsBySentence: illustrationsBySentence as Record<SentenceId, string>,
+  } satisfies ProjectSnapshot;
+  const latestKey = projectStateKey(projectName, latestSnapshot);
+  snapshotRef.current = latestSnapshot;
+  projectNameRef.current = projectName;
+
+  function rememberRecord(record: ProjectRecord) {
+    activeProject.current = record;
+    setProject(record);
+    setProjectName(record.name);
+    projectNameRef.current = record.name;
+    setProjects((current) => [record, ...current.filter((item) => item.id !== record.id)]
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)));
+    setLastProjectId(record.id);
+    setLastProjectIdState(record.id);
+  }
+
+  function rememberDetail(detail: ProjectDetail) {
+    detailRef.current = detail;
+    setProjectDetail(detail);
+  }
+
+  function updateKnownRevision(projectId: string, revision: number) {
+    setProjects((current) => current.map((item) => item.id === projectId ? { ...item, revision } : item));
+    const current = activeProject.current;
+    if (current?.id === projectId && revision >= current.revision) {
+      const updated = { ...current, revision };
+      activeProject.current = updated;
+      setProject(updated);
+    }
+  }
+
+  async function refreshProjectDetail(projectId: string) {
+    try {
+      const detail = await getProject(projectId);
+      setProjects((current) => current.map((item) => item.id === projectId ? detail : item));
+      if (activeProject.current?.id === projectId) {
+        updateKnownRevision(projectId, detail.revision);
+        rememberDetail(detail);
+      }
+    } catch (error: unknown) {
+      if (activeProject.current?.id === projectId) {
+        setProjectError(error instanceof ProjectApiError ? error.message : "The saved project history could not be refreshed.");
+      }
+    }
+  }
+
+  function applyProjectDetail(detail: ProjectDetail) {
+    hydrating.current = true;
+    const snapshot = detail.snapshot;
+    const record: ProjectRecord = { id: detail.id, name: detail.name, revision: detail.revision,
+      createdAt: detail.createdAt, updatedAt: detail.updatedAt, snapshot };
+    rememberRecord(record);
+    rememberDetail(detail);
+    setDocumentId(snapshot.documentId);
+    setSourceDraft(snapshot.sourceDraft);
+    setSentenceDocument(snapshot.document);
+    setHasPrepared(snapshot.hasPrepared);
+    setMode(snapshot.mode);
+    setProposal(null);
+    setReplacement(null);
+    visualSelectionState.replaceSelections({ backgroundAssetId: snapshot.backgroundAssetId,
+      illustrationsBySentence: snapshot.illustrationsBySentence });
+    speech.resetSelection();
+    speech.restoreProjectAudio(detail.audio, snapshot.voice);
+    video.resetDocument();
+    lastAcknowledgedKey.current = projectStateKey(detail.name, snapshot);
+    pendingCreate.current = null;
+    pendingSave.current = null;
+    setSaveError("");
+    setSaveStatus("saved");
+    setProjectError(detail.warnings.length ? detail.warnings.join(" ") : "");
+    rememberProjectAssets({ projectId: detail.id, documentId: snapshot.documentId,
+      audioBySentence: Object.fromEntries(detail.audio.map((item) => [item.id, item.assetId])),
+      backgroundAssetId: snapshot.backgroundAssetId,
+      illustrationsBySentence: snapshot.illustrationsBySentence });
+    const pending = pendingSubmissionsFor(detail.id)[0];
+    if (pending) {
+      const context: ProjectSubmissionContext = {
+        projectId: detail.id,
+        projectName: detail.name,
+        documentId: pending.documentId,
+        revision: detail.revision,
+        name: detail.name,
+        snapshot,
+        submissionToken: pending.submissionToken,
+        onAccepted: (revision) => updateKnownRevision(detail.id, revision),
+        onFinished: () => {
+          forgetPendingSubmission(detail.id, pending.submissionToken);
+          void refreshProjectDetail(detail.id);
+        },
+      };
+      if (pending.kind === "speech") speech.restorePendingSubmission(context);
+      else video.restorePendingSubmission(context);
+    }
+    setNotice(detail.warnings.length ? "Project opened with unavailable resources. Review the warnings before generating." : "Project opened. Saved audio and video history are ready to review.");
+  }
+
+  function currentContentExists(snapshot: ProjectSnapshot, name: string) {
+    return snapshot.sourceDraft.length > 0 || snapshot.hasPrepared || snapshot.document.sentences.length > 0
+      || snapshot.mode !== "manual" || snapshot.backgroundAssetId !== null
+      || Object.keys(snapshot.illustrationsBySentence).length > 0 || name !== "Untitled project";
+  }
+
+  async function flushSave(forceCreate = false): Promise<ProjectRecord | null> {
+    const currentProject = activeProject.current;
+    const currentSnapshot = snapshotRef.current;
+    if (!currentSnapshot) throw new Error("Project state is not ready to save.");
+    const currentName = projectNameRef.current;
+    const currentKey = projectStateKey(currentName, currentSnapshot);
+    if (saveQueue.current) {
+      await saveQueue.current;
+      if (lastAcknowledgedKey.current === currentKey) return activeProject.current;
+      return flushSave(forceCreate);
+    }
+    if (currentProject && lastAcknowledgedKey.current === currentKey && !pendingCreate.current && !pendingSave.current) return currentProject;
+    if (!currentProject && !pendingCreate.current && !forceCreate && !currentContentExists(currentSnapshot, currentName)) return null;
+
+    const run = (async () => {
+      try {
+        while (true) {
+          if (!activeProject.current) {
+            let operation = pendingCreate.current;
+            if (!operation) {
+              const snapshot = snapshotRef.current ?? currentSnapshot;
+              const name = projectNameRef.current;
+              operation = { name, snapshot, key: projectStateKey(name, snapshot), operationToken: createOpaqueToken() };
+              pendingCreate.current = operation;
+            }
+            setSaveStatus("saving");
+            const created = await createProject(operation.name, operation.snapshot, operation.operationToken);
+            rememberRecord(created);
+            lastAcknowledgedKey.current = operation.key;
+            pendingCreate.current = null;
+            const latest = snapshotRef.current;
+            const latestName = projectNameRef.current;
+            if (latest && projectStateKey(latestName, latest) === operation.key) {
+              setSaveStatus("saved");
+              setSaveError("");
+              return created;
+            }
+            continue;
+          }
+
+          const base = activeProject.current;
+          let operation = pendingSave.current;
+          if (!operation) {
+            const snapshot = snapshotRef.current ?? currentSnapshot;
+            const name = projectNameRef.current;
+            operation = { projectId: base.id, name, snapshot, key: projectStateKey(name, snapshot),
+              expectedRevision: base.revision, operationToken: createOpaqueToken() };
+            pendingSave.current = operation;
+          }
+          if (operation.projectId !== base.id) throw new Error("The pending save belongs to a different project. Retry it before switching projects.");
+          setSaveStatus("saving");
+          setSaveError("");
+          const saved = await saveProject(operation.projectId, operation.name, operation.snapshot,
+            operation.expectedRevision, operation.operationToken);
+          rememberRecord(saved);
+          if (detailRef.current?.id === saved.id) rememberDetail({ ...detailRef.current, ...saved });
+          lastAcknowledgedKey.current = operation.key;
+          pendingSave.current = null;
+          const latest = snapshotRef.current;
+          const latestName = projectNameRef.current;
+          const latestKeyNow = latest ? projectStateKey(latestName, latest) : "";
+          if (latestKeyNow === operation.key) {
+            setSaveStatus("saved");
+            setSaveError("");
+            return saved;
+          }
+        }
+      } catch (error: unknown) {
+        if (error instanceof ProjectApiError && (error.status === 400 || error.status === 422)) {
+          pendingCreate.current = null;
+          pendingSave.current = null;
+        }
+        setSaveStatus("failed");
+        setSaveError(error instanceof ProjectApiError ? error.message : "The project could not be saved. Retry before switching projects.");
+        throw error;
+      }
+    })();
+    saveQueue.current = run;
+    try {
+      return await run;
+    } finally {
+      if (saveQueue.current === run) saveQueue.current = null;
+    }
+  }
+
+  function resetToNewProject() {
+    projectLoadSequence.current += 1;
+    activeProject.current = null;
+    setProject(null);
+    detailRef.current = null;
+    setProjectDetail(null);
+    setProjectName("Untitled project");
+    projectNameRef.current = "Untitled project";
+    setDocumentId(createOpaqueToken());
+    setSourceDraft("");
+    setSentenceDocument(createSentenceDocument(""));
+    setHasPrepared(false);
+    setMode("manual");
+    setProposal(null);
+    setReplacement(null);
+    visualSelectionState.replaceSelections({ backgroundAssetId: null, illustrationsBySentence: {} });
+    speech.resetSelection();
+    speech.resetProjectState();
+    video.resetDocument();
+    lastAcknowledgedKey.current = null;
+    pendingCreate.current = null;
+    pendingSave.current = null;
+    setSaveError("");
+    setSaveStatus("unsaved");
+    setProjectError("");
+    setNotice("New project. Save when you are ready; generation also saves the project automatically.");
+  }
+
+  async function openProject(projectId: string) {
+    const sequence = ++projectLoadSequence.current;
+    const detail = await getProject(projectId);
+    if (sequence !== projectLoadSequence.current) return;
+    applyProjectDetail(detail);
+  }
+
+  async function performNavigation(navigation: ProjectNavigation, discard = false) {
+    if (speech.waiting || video.waiting || aiPending) return;
+    if (!discard) {
+      try {
+          await flushSave();
+      } catch {
+        setPendingNavigation(navigation);
+        return;
+      }
+    } else if (activeProject.current) {
+      try {
+        const saved = await getProject(activeProject.current.id);
+        applyProjectDetail(saved);
+      } catch (error: unknown) {
+        setProjectError(error instanceof ProjectApiError ? error.message : "The last saved version could not be reopened.");
+        return;
+      }
+    } else {
+      resetToNewProject();
+    }
+    setPendingNavigation(null);
+    if (navigation.kind === "new") resetToNewProject();
+    else {
+      try { await openProject(navigation.projectId); }
+      catch (error: unknown) {
+        setProjectError(error instanceof ProjectApiError ? error.message : "The selected project could not be opened.");
+      }
+    }
+  }
+
+  async function generateSpeech(sentences: readonly { id: string; text: string }[], force = false) {
+    if (generationPreparing || speech.outstanding || video.outstanding || aiPending) return;
+    setGenerationPreparing(true);
+    try {
+      await flushSave();
+      let record = activeProject.current;
+      if (!record) throw new Error("Save the project before generating speech.");
+      const snapshot = snapshotRef.current;
+      if (!snapshot) throw new Error("Project state is not ready to generate speech.");
+      const token = createOpaqueToken();
+      const key = projectStateKey(projectNameRef.current, snapshot);
+      const context: ProjectSubmissionContext = {
+        projectId: record.id, projectName: record.name, documentId: snapshot.documentId,
+        revision: record.revision, name: projectNameRef.current, snapshot, submissionToken: token,
+        onAccepted: (revision) => {
+          updateKnownRevision(record!.id, revision);
+          if (snapshotRef.current && projectStateKey(projectNameRef.current, snapshotRef.current) === key) {
+            lastAcknowledgedKey.current = key;
+            setSaveStatus("saved");
+          }
+        },
+        onFinished: () => {
+          forgetPendingSubmission(record!.id, token);
+          void refreshProjectDetail(record!.id);
+        },
+      };
+      rememberPendingSubmission({ projectId: record.id, projectName: record.name, documentId: snapshot.documentId,
+        submissionToken: token, kind: "speech" });
+      await speech.generate(sentences, force, context);
+    } catch (error: unknown) {
+      setProjectError(error instanceof Error ? error.message : "The project must be saved before speech can start.");
+    } finally {
+      setGenerationPreparing(false);
+    }
+  }
+
+  async function generateVideo(sentences: Parameters<typeof video.generate>[0]) {
+    if (generationPreparing || speech.outstanding || video.outstanding || aiPending || !speech.binding) return;
+    setGenerationPreparing(true);
+    try {
+      await flushSave();
+      const record = activeProject.current;
+      const snapshot = snapshotRef.current;
+      if (!record || !snapshot) throw new Error("Save the project before generating video.");
+      const token = createOpaqueToken();
+      const key = projectStateKey(projectNameRef.current, snapshot);
+      const context: ProjectSubmissionContext = {
+        projectId: record.id, projectName: record.name, documentId: snapshot.documentId,
+        revision: record.revision, name: projectNameRef.current, snapshot, submissionToken: token,
+        onAccepted: (revision) => {
+          updateKnownRevision(record.id, revision);
+          if (snapshotRef.current && projectStateKey(projectNameRef.current, snapshotRef.current) === key) {
+            lastAcknowledgedKey.current = key;
+            setSaveStatus("saved");
+          }
+        },
+        onFinished: () => {
+          forgetPendingSubmission(record.id, token);
+          void refreshProjectDetail(record.id);
+        },
+      };
+      rememberPendingSubmission({ projectId: record.id, projectName: record.name, documentId: snapshot.documentId,
+        submissionToken: token, kind: "video" });
+      await video.generate(sentences, speech.binding, snapshot.backgroundAssetId, context);
+    } catch (error: unknown) {
+      setProjectError(error instanceof Error ? error.message : "The project must be saved before video generation can start.");
+    } finally {
+      setGenerationPreparing(false);
+    }
+  }
 
   useEffect(() => {
     let active = true;
@@ -94,6 +480,28 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    let active = true;
+    const controller = new AbortController();
+    listProjects(controller.signal).then((items) => {
+      if (!active) return;
+      setProjects(items);
+      setProjectLoadState("online");
+      const lastId = getLastProjectId();
+      setLastProjectIdState(lastId && items.some((item) => item.id === lastId) ? lastId : null);
+    }).catch((error: unknown) => {
+      if (!active) return;
+      setProjectLoadState("offline");
+      setProjectError(error instanceof ProjectApiError ? error.message : "Saved projects could not be loaded. Editing remains available.");
+    }).finally(() => {
+      if (active) {
+        setWorkspaceReady(true);
+        setSaveStatus("unsaved");
+      }
+    });
+    return () => { active = false; controller.abort(); };
+  }, []);
+
+  useEffect(() => {
     if (replacement !== null) cancelButton.current?.focus();
     else if (wasConfirming.current) {
       if (confirmationOrigin.current === "ai" && applyButton.current) applyButton.current.focus();
@@ -102,8 +510,51 @@ export default function App() {
     wasConfirming.current = replacement !== null;
   }, [replacement]);
 
+  useEffect(() => {
+    if (!hydrating.current) return;
+    const active = activeProject.current;
+    if (active && lastAcknowledgedKey.current === latestKey
+      && projectStateKey(active.name, latestSnapshot) === latestKey) hydrating.current = false;
+  }, [latestKey, latestSnapshot, project]);
+
+  const hasUnsavedWork = project
+    ? lastAcknowledgedKey.current !== latestKey
+    : currentContentExists(latestSnapshot, projectName);
+
+  useEffect(() => {
+    if (!workspaceReady || hydrating.current) return;
+    if (!project) {
+      setSaveStatus((current) => current === "saving" ? current : "unsaved");
+      return;
+    }
+    if (lastAcknowledgedKey.current === latestKey || saveStatus === "failed") {
+      if (lastAcknowledgedKey.current === latestKey) setSaveStatus("saved");
+      return;
+    }
+    if (autosaveTimer.current !== null) clearTimeout(autosaveTimer.current);
+    autosaveTimer.current = setTimeout(() => {
+      autosaveTimer.current = null;
+      void flushSave().catch(() => undefined);
+    }, 2_000);
+    return () => {
+      if (autosaveTimer.current !== null) clearTimeout(autosaveTimer.current);
+      autosaveTimer.current = null;
+    };
+  }, [workspaceReady, project, latestKey, saveStatus]);
+
+  useEffect(() => {
+    if (!workspaceReady || !hasUnsavedWork) return;
+    const warnOnLeave = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warnOnLeave);
+    return () => window.removeEventListener("beforeunload", warnOnLeave);
+  }, [workspaceReady, hasUnsavedWork]);
+
   function prepareSentences(source: string) {
     const prepared = createSentenceDocument(source);
+    setDocumentId(createOpaqueToken());
     setSentenceDocument(prepared);
     visualSelectionState.clearSentenceIllustrations();
     speech.resetSelection();
@@ -163,6 +614,7 @@ export default function App() {
 
   function applyProposal(reviewed: TextProposal) {
     const accepted = createSentenceDocumentFromProposal(reviewed.sourceText, reviewed.sentences);
+    setDocumentId(createOpaqueToken());
     setSentenceDocument(accepted);
     visualSelectionState.clearSentenceIllustrations();
     speech.resetSelection();
@@ -238,7 +690,8 @@ export default function App() {
   }
 
   const preparingAgain = replacement !== null;
-  const editingLocked = preparingAgain || aiPending || speech.waiting || video.waiting;
+  const projectSwitchBlocked = preparingAgain || aiPending || speech.waiting || video.waiting || generationPreparing;
+  const editingLocked = preparingAgain || aiPending || speech.waiting || video.waiting || generationPreparing;
   const sourceLocked = editingLocked || proposal !== null;
   const providerAvailable = providers.some((item) => item.id === selectedProvider && item.available);
   const sourceOverLimit = mode === "ai" && sourceDraft.length > MAX_SOURCE_LENGTH;
@@ -249,6 +702,8 @@ export default function App() {
       .filter(([sentenceId]) => sentenceDocument.sentences.some((sentence) => sentence.id === sentenceId))
       .map(([, id]) => ({ id, kind: "illustration" as const })),
   ]);
+  const outstanding = speech.outstandingInfo ?? video.outstandingInfo;
+  const activeHistory = projectDetail && projectDetail.id === project?.id ? projectDetail.history : [];
 
   return (
     <main className="app-shell">
@@ -265,6 +720,60 @@ export default function App() {
           {backendState === "offline" && "Local service unavailable · Editing still works"}
         </p>
       </header>
+
+      <section className="project-toolbar" aria-label="Project controls">
+        <div className="project-name-field">
+          <label htmlFor="project-name">Project name</label>
+          <input id="project-name" value={projectName} maxLength={120} disabled={projectSwitchBlocked}
+            onChange={(event) => setProjectName(event.target.value)} />
+        </div>
+        <button type="button" disabled={!workspaceReady || projectSwitchBlocked}
+          onClick={() => { void performNavigation({ kind: "new" }); }}>New project</button>
+        <div className="project-open-field">
+          <label htmlFor="open-project">Open project</label>
+          <select id="open-project" value="" disabled={!workspaceReady || projectSwitchBlocked || projectLoadState !== "online"}
+            onChange={(event) => { const selectedId = event.target.value; if (selectedId) void performNavigation({ kind: "open", projectId: selectedId }); }}>
+            <option value="">{projectLoadState === "checking" ? "Loading projects…" : "Choose a saved project"}</option>
+            {projects.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+          </select>
+        </div>
+        {lastProjectId && projects.some((item) => item.id === lastProjectId) && (
+          <button type="button" disabled={projectSwitchBlocked} onClick={() => { void performNavigation({ kind: "open", projectId: lastProjectId }); }}>
+            Open last project
+          </button>
+        )}
+        <button type="button" className="primary-button" disabled={!workspaceReady || saveStatus === "saving" || projectSwitchBlocked}
+          onClick={() => { void flushSave(true).catch((error: unknown) => {
+            setProjectError(error instanceof Error ? error.message : "The project could not be saved.");
+          }); }}>Save</button>
+        <span className="save-status" data-state={saveStatus} role="status">
+          {saveStatus === "loading" && "Loading projects…"}
+          {saveStatus === "unsaved" && (project ? "Unsaved" : "Unsaved draft")}
+          {saveStatus === "saving" && "Saving…"}
+          {saveStatus === "saved" && "Saved"}
+          {saveStatus === "failed" && "Save failed"}
+        </span>
+      </section>
+      {projectLoadState === "offline" && <p className="input-error" role="status">Saved project storage is unavailable. You can keep editing this draft; save status will update when the local service is available.</p>}
+      {saveError && <p className="input-error" role="alert">{saveError}</p>}
+      {projectError && <p className="input-error" role="alert">{projectError}</p>}
+      {outstanding && <p className="project-outstanding" role="status">
+        A {speech.outstandingInfo ? "speech" : "video"} submission for <strong>{outstanding.projectName}</strong> remains outstanding. Switching projects does not cancel it.
+      </p>}
+
+      {pendingNavigation && (
+        <section className="confirmation" role="alertdialog" aria-labelledby="save-before-switch-title">
+          <div>
+            <h2 id="save-before-switch-title">Save this project before switching?</h2>
+            <p>The save failed. Your current draft is still open. Retry the exact pending save, cancel the switch, or explicitly discard this draft and continue.</p>
+          </div>
+          <div className="confirmation-actions">
+            <button type="button" onClick={() => setPendingNavigation(null)}>Cancel switch</button>
+            <button type="button" onClick={() => { void performNavigation(pendingNavigation); }}>Retry save</button>
+            <button type="button" className="delete-button" onClick={() => { void performNavigation(pendingNavigation, true); }}>Discard and continue</button>
+          </div>
+        </section>
+      )}
 
       {replacement !== null && (
         <section
@@ -385,7 +894,7 @@ export default function App() {
               <pre>{sentenceDocument.sourceText}</pre>
             </details>
           )}
-          <p className="session-note">Work stays in this browser session. Refreshing or closing the page clears it.</p>
+          <p className="session-note">Save this project to keep the source draft and edits after closing the browser. Unsaved changes are kept in this tab until it closes.</p>
         </section>
 
         <section className="panel editor-panel" aria-labelledby="editor-title">
@@ -427,7 +936,8 @@ export default function App() {
           {visualSelectionState.storageWarning && <p className="input-error" role="status">{visualSelectionState.storageWarning}</p>}
 
           <SpeechControls speech={speech} sentences={sentenceDocument.sentences}
-            locked={editingLocked || speech.outstanding || video.outstanding || proposal !== null} />
+            locked={editingLocked || speech.outstanding || video.outstanding || proposal !== null}
+            onGenerate={() => { void generateSpeech(sentenceDocument.sentences); }} />
 
           {sentenceCount === 0 ? (
             <div className="empty-state">
@@ -472,7 +982,7 @@ export default function App() {
                       <SentenceSpeech sentence={sentence} position={position} selection={speech.selection} job={speech.job}
                         binding={speech.binding}
                         disabled={editingLocked || speech.outstanding || video.outstanding || proposal !== null || !speech.readiness?.available || !speech.capabilities?.available}
-                        regenerate={() => { void speech.generate([sentence], true); }} />
+                        regenerate={() => { void generateSpeech([sentence], true); }} />
                     </li>
                   );
                 })}
@@ -483,7 +993,8 @@ export default function App() {
       </div>
       <VideoControls video={video} sentences={sentenceDocument.sentences} selection={speech.selection} binding={speech.binding}
         locked={editingLocked || speech.outstanding || proposal !== null} backgroundAssetId={backgroundAssetId}
-        illustrationsBySentence={illustrationsBySentence} visualProblem={visualProblem} />
+        illustrationsBySentence={illustrationsBySentence} visualProblem={visualProblem} history={activeHistory}
+        onGenerate={(sentences) => { void generateVideo(sentences); }} />
     </main>
   );
 }

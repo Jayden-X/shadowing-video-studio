@@ -200,7 +200,7 @@ interaction can inform this selector's UI; supported voices are provider capabil
   explicit recovery/regeneration. Save triggers, frontend cache and backend project/history
   formats require a design decision before implementation; large media stays outside Git.
 
-See the unified [Task 008](../../tasks/backlog/008-project-history-persistence.md).
+See the unified [Task 008](../../tasks/in-progress/008-project-history-persistence.md).
 
 ## Open decisions
 

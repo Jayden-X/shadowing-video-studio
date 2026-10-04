@@ -78,9 +78,10 @@ than an operating-system disk quota. An output at the limit is rejected and neve
 as a truncated export. Final size, format and duration checks still apply.
 Failed attempts retain their reservation. No automatic overwrite, pruning or deletion occurs.
 
-Document/audio/export lookup metadata is volatile. Browser/service restart loses selections
-and lookup IDs, while existing generated files remain intact. Durable project/history storage
-and final end-user packaging are deferred; this is the first local application workflow.
+Task008 records project-bound completed exports and frozen inputs in local SQLite metadata.
+Historical outputs remain accessible after edits/restarts when their recorded bytes validate;
+current TTS availability is not required for historical MP4 playback. Unregistered legacy
+exports remain preserved without automatic history import. See [project history](project-history.md).
 
 ## Validation evidence
 

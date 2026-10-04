@@ -1,5 +1,6 @@
 import { isWellFormedText, type SentenceItem } from "./domain/sentences";
 import { jobMatchesSnapshot, speechInputProblem, type SpeechBinding, type SpeechJob, type SpeechSentence } from "./domain/speech";
+import type { ProjectSnapshot } from "./projectApi";
 
 export type SpeechStatus = { available: boolean; reason: string | null; voice: string; model: string; backend: string };
 export type SpeechVoice = { id: string; label: string; configurationFingerprint: string };
@@ -10,6 +11,21 @@ export type SpeechCapabilities = {
   model: string;
   language: "English";
   voices: SpeechVoice[];
+};
+export type ProjectSpeechJob = SpeechJob & {
+  projectId: string;
+  documentId: string;
+  projectRevision: number;
+  submissionToken: string;
+};
+export type ProjectSpeechCommand = {
+  projectId: string;
+  documentId: string;
+  expectedRevision: number;
+  name: string;
+  snapshot: ProjectSnapshot;
+  submissionToken: string;
+  singleSentenceId?: string;
 };
 export class SpeechApiError extends Error {
   constructor(message: string, readonly status?: number) { super(message); }
@@ -91,9 +107,13 @@ export async function getSpeechCapabilities(signal?: AbortSignal): Promise<Speec
     model: value.model, language: "English", voices };
 }
 
-function validateJob(value: unknown, snapshot: readonly SentenceItem[], binding: SpeechBinding, expectedId?: string): SpeechJob {
+function validateJob(value: unknown, snapshot: readonly SentenceItem[], binding: SpeechBinding, expectedId?: string,
+  projectCommand?: ProjectSpeechCommand): SpeechJob | ProjectSpeechJob {
   const invalid = () => new SpeechApiError(INVALID_RESPONSE);
-  if (!isRecord(value) || !hasExactKeys(value, ["id", "status", "sentences", "error", "voice", "configurationFingerprint"])
+  const expectedKeys = projectCommand
+    ? ["id", "status", "sentences", "error", "voice", "configurationFingerprint", "projectId", "documentId", "projectRevision", "submissionToken"]
+    : ["id", "status", "sentences", "error", "voice", "configurationFingerprint"];
+  if (!isRecord(value) || !hasExactKeys(value, expectedKeys)
     || typeof value.id !== "string" || !opaqueId.test(value.id) || (expectedId !== undefined && value.id !== expectedId)
     || value.voice !== binding.voice || value.configurationFingerprint !== binding.configurationFingerprint
     || (value.status !== "queued" && value.status !== "running" && value.status !== "completed" && value.status !== "failed")
@@ -121,6 +141,13 @@ function validateJob(value: unknown, snapshot: readonly SentenceItem[], binding:
   if (!jobMatchesSnapshot(job, snapshot, binding)) throw invalid();
   if (job.status === "completed" && (job.error !== null || sentences.some((item) => item.status !== "ready"))) throw invalid();
   if (job.status === "failed" && (job.error === null || sentences.some((item) => item.status === "pending" || item.status === "generating"))) throw invalid();
+  if (projectCommand) {
+    if (value.projectId !== projectCommand.projectId || value.documentId !== projectCommand.documentId
+      || !Number.isSafeInteger(value.projectRevision) || (value.projectRevision as number) < projectCommand.expectedRevision
+      || value.submissionToken !== projectCommand.submissionToken) throw invalid();
+    return { ...job, projectId: projectCommand.projectId, documentId: projectCommand.documentId,
+      projectRevision: value.projectRevision as number, submissionToken: projectCommand.submissionToken };
+  }
   return job;
 }
 
@@ -140,6 +167,36 @@ export async function createSpeechJob(
       voice: binding.voice, configurationFingerprint: binding.configurationFingerprint }), signal,
   });
   return validateJob(value, sentences, binding);
+}
+
+export async function createProjectSpeechJob(
+  sentences: readonly SentenceItem[],
+  binding: SpeechBinding,
+  command: ProjectSpeechCommand,
+  signal?: AbortSignal,
+): Promise<ProjectSpeechJob> {
+  const problem = speechInputProblem(sentences);
+  if (problem) throw new SpeechApiError(problem);
+  if (!binding.voice.trim() || !fingerprint.test(binding.configurationFingerprint)) throw new SpeechApiError("Choose a currently supported speech voice before generating.");
+  if (command.singleSentenceId !== undefined && (sentences.length !== 1 || sentences[0].id !== command.singleSentenceId)) {
+    throw new SpeechApiError("A single-sentence regeneration must match the selected sentence.");
+  }
+  const value = await requestJson(`/api/projects/${command.projectId}/speech`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      operationToken: command.submissionToken,
+      expectedRevision: command.expectedRevision,
+      name: command.name,
+      snapshot: command.snapshot,
+      configurationFingerprint: binding.configurationFingerprint,
+      ...(command.singleSentenceId === undefined ? {} : { singleSentenceId: command.singleSentenceId }),
+    }), signal,
+  });
+  return validateJob(value, sentences, binding, undefined, command) as ProjectSpeechJob;
+}
+
+export function validateProjectSpeechAttemptJob(value: unknown, snapshot: readonly SentenceItem[], binding: SpeechBinding): SpeechJob {
+  return validateJob(value, snapshot, binding) as SpeechJob;
 }
 export async function getSpeechJob(
   id: string,
