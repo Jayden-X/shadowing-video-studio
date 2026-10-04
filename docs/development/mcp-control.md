@@ -20,10 +20,11 @@ input snapshot for one speech/video submission, independent of the browser edito
 | `request_generation` | execute | Freeze validated speech/video input for local review |
 | `get_request` | read | Review/submission state; never approval nonce |
 | `execute_request` | execute | Submit approved frozen work; repeat returns same submission |
-| `get_job` | read | Current-session progress and output references |
+| `get_job` | read | Progress/output only for jobs issued by reviewed MCP requests in this session |
 
 Proposals must be reviewed as sentences before speech. Video approval requires listening
-to the exact audio references displayed by the local review page. Speech payload `force`
+to the exact audio references and inspecting selected background/illustration previews
+displayed by the local review page. Speech payload `force`
 is allowed only with one sentence for regeneration. Video payload uses sentence/audio IDs
 and optional existing background/illustration IDs; never filesystem paths.
 
@@ -33,7 +34,8 @@ and optional existing background/illustration IDs; never filesystem paths.
 2. Call `request_generation` with a unique `requestId`, operation `speech` or `video`, and
    the corresponding validated payload. No generation starts.
 3. Ask the owner to open the returned `reviewPath` on the backend's local origin. They
-   inspect exact text/configuration and audio where applicable, then approve or reject.
+   inspect exact text/configuration, audio and image previews where applicable, then
+   approve or reject.
 4. Query `get_request`; call `execute_request` only after approval.
 5. Query `get_job` using the result's job ID. Use existing local preview/download routes.
 
