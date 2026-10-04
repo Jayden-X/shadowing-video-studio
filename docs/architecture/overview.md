@@ -99,17 +99,24 @@ and byte validation are authoritative. Exact current bindings govern audio reuse
 historical MP4s retain their own frozen inputs. Existing visual JSON sidecars remain unchanged
 under [ADR 0003](decisions/0003-local-visual-library.md). No legacy media import or pruning occurs.
 
+Task013 shares the Task008-backed media service instances but its transient MCP
+requests do not bind to saved project revisions or write project history. That binding
+and editor synchronization remain a follow-up using Task008 application commands.
+
 ### 6. Future task execution and control
 
 Preserve an application-level task boundary so several tasks can eventually be prepared, suspended, scheduled, and recovered without tying execution to an open UI session. Assigned work must reference frozen or versioned source, reviewed canonical sentences with stable IDs, and validated configuration; its stable task identity must be distinct from each execution attempt.
 
 Future scheduling coordinates application workflows. It does not own domain operations or replace human review. The first future local executor is limited to one heavy model/media job at a time; scheduling policy, checkpoints, persistence, and later concurrency need explicit decisions before implementation.
 
-UI, a future CLI, and a future MCP adapter must call the same application commands and status queries. MCP is a control adapter, not a path to mutate domain objects or persistence directly. Local access, validated inputs, declared permissions, and required approvals apply at the command boundary.
+UI, a future CLI, and the Task013 MCP adapter must call the same application commands and status queries. MCP is a control adapter, not a path to mutate domain objects or persistence directly. Local access, validated inputs, declared permissions, and required approvals apply at the command boundary.
 
 Keep diagnostic events behind an application observability boundary. Task/run/correlation and canonical sentence IDs must connect state changes, provider attempts, safe configuration references, asset references, and sanitized failures without placing secrets or full user dialogue in logs.
 
-The MVP remains manually initiated, with one video at a time and no scheduler or MCP runtime. See [future task and control seams](future-task-control.md) for the reserved boundaries and decisions that remain open.
+The original MVP remains the baseline, with one video at a time and no scheduler.
+Task013 adds explicitly authorized local MCP control after MVP; see
+[ADR0005](decisions/0005-local-mcp-control.md) and [its contracts](../development/mcp-control.md).
+MCP project binding/editor synchronization remains a follow-up against Task008. See [future task and control seams](future-task-control.md) for the reserved boundaries and decisions that remain open.
 
 ## Extension seams
 

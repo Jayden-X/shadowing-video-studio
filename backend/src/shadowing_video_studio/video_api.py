@@ -4,32 +4,17 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, ConfigDict, Field, StrictStr
 
-from shadowing_video_studio.speech import MAX_SPEECH_SENTENCES, VOICE, SpeechError
+from shadowing_video_studio.application_commands import submit_video
+from shadowing_video_studio.generation_requests import VideoJobRequest
+from shadowing_video_studio.speech import SpeechError
 from shadowing_video_studio.speech_api import get_speech_service, verify_local_request
 from shadowing_video_studio.speech_jobs import SpeechJobs
-from shadowing_video_studio.video_jobs import VideoJobError, VideoJobs, VideoSentenceSelection
+from shadowing_video_studio.video_jobs import VideoJobError, VideoJobs
 from shadowing_video_studio.video_settings import VideoSettings
 from shadowing_video_studio.visual_assets import VisualLibrary
 
 router = APIRouter(prefix="/api/video", dependencies=[Depends(verify_local_request)])
-
-
-class VideoSentenceRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
-    id: StrictStr = Field(min_length=1, max_length=100)
-    text: StrictStr = Field(min_length=1, max_length=4000)
-    assetId: StrictStr = Field(pattern=r"^[0-9a-f]{32}$")
-    illustrationAssetId: StrictStr | None = Field(default=None, pattern=r"^[0-9a-f]{32}$")
-
-
-class VideoJobRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
-    sentences: list[VideoSentenceRequest] = Field(min_length=1, max_length=MAX_SPEECH_SENTENCES)
-    backgroundAssetId: StrictStr | None = Field(default=None, pattern=r"^[0-9a-f]{32}$")
-    voice: StrictStr = Field(default=VOICE, min_length=1, max_length=64)
-    configurationFingerprint: StrictStr | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
 
 def create_video_service(speech: SpeechJobs, visuals: VisualLibrary | None = None) -> VideoJobs:
@@ -55,15 +40,7 @@ async def submit(
     payload: VideoJobRequest, service: Annotated[VideoJobs, Depends(get_video_service)]
 ) -> dict:
     try:
-        return await service.submit(
-            [
-                VideoSentenceSelection(item.id, item.text, item.assetId, item.illustrationAssetId)
-                for item in payload.sentences
-            ],
-            background_asset_id=payload.backgroundAssetId,
-            voice=payload.voice,
-            configuration_fingerprint=payload.configurationFingerprint,
-        )
+        return await submit_video(service, payload)
     except (VideoJobError, SpeechError) as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 

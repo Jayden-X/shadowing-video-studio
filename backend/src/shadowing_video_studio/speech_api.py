@@ -5,15 +5,13 @@ from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictStr
 
+from shadowing_video_studio.application_commands import speech_capabilities, submit_speech
+from shadowing_video_studio.generation_requests import SpeechJobRequest
 from shadowing_video_studio.providers.qwen import QwenSpeechProvider
 from shadowing_video_studio.speech import (
-    MAX_SPEECH_SENTENCES,
-    VOICE,
     HeavyJobGate,
     SpeechError,
-    SpeechSentence,
 )
 from shadowing_video_studio.speech_assets import SpeechAssets
 from shadowing_video_studio.speech_jobs import SpeechJobs
@@ -45,20 +43,6 @@ def verify_local_request(request: Request) -> None:
 
 
 router = APIRouter(prefix="/api/speech", dependencies=[Depends(verify_local_request)])
-
-
-class SentenceRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
-    id: StrictStr = Field(min_length=1, max_length=100)
-    text: StrictStr = Field(min_length=1, max_length=4000)
-
-
-class SpeechJobRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
-    sentences: list[SentenceRequest] = Field(min_length=1, max_length=MAX_SPEECH_SENTENCES)
-    force: StrictBool = False
-    voice: StrictStr = Field(default=VOICE, min_length=1, max_length=64)
-    configurationFingerprint: StrictStr | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
 
 def create_speech_service(assets: SpeechAssets | None = None) -> SpeechJobs:
@@ -98,34 +82,14 @@ async def submit(
     payload: SpeechJobRequest, service: Annotated[SpeechJobs, Depends(get_speech_service)]
 ) -> dict:
     try:
-        return await service.submit(
-            [SpeechSentence(item.id, item.text) for item in payload.sentences],
-            payload.force,
-            payload.voice,
-            payload.configurationFingerprint,
-        )
+        return await submit_speech(service, payload)
     except SpeechError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
 @router.get("/capabilities")
 async def capabilities(service: Annotated[SpeechJobs, Depends(get_speech_service)]) -> dict:
-    item = await service.capabilities()
-    return {
-        "available": item.available,
-        "reason": item.reason,
-        "defaultVoice": item.default_voice,
-        "model": item.model,
-        "language": item.language,
-        "voices": [
-            {
-                "id": voice.id,
-                "label": voice.label,
-                "configurationFingerprint": voice.configuration_fingerprint,
-            }
-            for voice in item.voices
-        ],
-    }
+    return await speech_capabilities(service)
 
 
 @router.get("/jobs/{job_id}")
