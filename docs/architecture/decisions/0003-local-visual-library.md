@@ -39,10 +39,12 @@ A missing or changed library asset is rejected before media tool preflight/rende
 
 ## Layout and sentence editing
 
-Use a static full-video background, scaled to cover 1920 × 1080 and dimmed under the
-existing text/waveform. Contain each illustration within the existing right-side panel;
-keep it visible for its sentence's audio and five-second pause. No images preserves the
-existing template.
+Use a static full-video background, scaled to cover 1920 × 1080. Per the owner's
+2026-10-04 layout correction, a sentence without an illustration has no background dim
+layer and no right-side placeholder panel, throughout speech and the five-second pause.
+Illustrated pages retain the dim layer and right-side panel; contain the selected image
+and keep it visible for that sentence's audio and pause. Background and illustration
+inputs remain independent; no images uses the default light-blue background and dark text.
 
 Bind illustrations to stable sentence IDs. Text edits and reorder preserve bindings;
 deletion removes only the association. Split retains the left sentence's illustration

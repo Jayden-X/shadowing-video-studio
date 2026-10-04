@@ -210,20 +210,20 @@ def page_arguments(
                 filename,
             ]
         )
+    dim_background = background_filename is not None and illustration_filename is not None
+    dim_filter = "drawbox=x=0:y=0:w=iw:h=ih:color=black@0.60:t=fill," if dim_background else ""
     background_graph = (
         "[1:v]scale=w=1920:h=1080:force_original_aspect_ratio=increase:out_range=tv,"
-        "crop=w=1920:h=1080,setsar=1,format=rgb24,"
-        "drawbox=x=0:y=0:w=iw:h=ih:color=black@0.60:t=fill,"
-        "format=yuv420p,"
+        "crop=w=1920:h=1080,setsar=1,format=rgb24," + dim_filter + "format=yuv420p,"
         f"loop=loop={page.frame_count - 1}:size=1:start=0,setpts=N/(30*TB)[background];"
         if background_filename is not None
         else f"color=c=0x9dd7f5:s=1920x1080:r=30:d={duration}[background];"
     )
-    panel_graph = "[background]drawbox=x=1240:y=92:w=584:h=736:color=0x20334c:t=fill"
+    panel_graph = "[background]"
     if illustration_filename is not None:
         illustration_index = 2 if background_filename is not None else 1
         panel_graph += (
-            "[panel];"
+            "drawbox=x=1240:y=92:w=584:h=736:color=0x20334c:t=fill[panel];"
             f"[{illustration_index}:v]scale=w=584:h=736:force_original_aspect_ratio=decrease,"
             "setsar=1,format=rgba,"
             f"loop=loop={page.frame_count - 1}:size=1:start=0,setpts=N/(30*TB)[illustration];"
@@ -231,12 +231,10 @@ def page_arguments(
             "y=92+(736-overlay_h)/2:eof_action=repeat:shortest=0[illustrated];"
             "[illustrated]"
         )
-    else:
-        panel_graph += ","
     waveform_index = (
         1 + int(background_filename is not None) + int(illustration_filename is not None)
     )
-    font_color = "white" if background_filename is not None else "0x173b59"
+    font_color = "white" if dim_background else "0x173b59"
     graph = (
         audio_graph
         + background_graph

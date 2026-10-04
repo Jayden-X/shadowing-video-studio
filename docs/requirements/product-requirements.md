@@ -78,8 +78,9 @@ See [future task and control seams](../architecture/future-task-control.md) for 
 - Waveform style: 36 black rounded frequency bars below the left text area, on a transparent
   layer without a backplate. Heights follow frequency energy and speech volume at 30 fps;
   silence (including the practice pause) hides the bars. The default background is light blue
-  with dark text. Uploaded backgrounds retain their existing dim layer; light backgrounds
-  are recommended for black-bar contrast.
+  with dark text. Pages without an illustration show uploaded backgrounds without a dim
+  layer or right-side placeholder. Illustrated pages retain the dim layer and panel;
+  light backgrounds are recommended for black-bar contrast.
 - TTS: Qwen3-TTS.
 - Default voice: Aiden.
 - Voice cloning is not part of the current default.
