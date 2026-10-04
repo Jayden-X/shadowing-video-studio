@@ -176,6 +176,18 @@ class ApplicationControl:
                 "detail": "Inspect local jobs before retrying.",
             }
 
+    def get_job(self, kind: Operation, job_id: str) -> dict:
+        # Task008 services can restore arbitrary saved attempts. Until project tools are
+        # integrated, MCP may inspect only jobs issued by this session's reviewed requests.
+        issued = any(
+            item.operation == kind and item.result and item.result.get("id") == job_id
+            for item in self._requests.values()
+        )
+        if not issued:
+            raise ControlError("not_found", "Job was not issued by this MCP service session.", 404)
+        service = self.speech if kind == "speech" else self.video
+        return service.get(job_id)
+
     async def close(self) -> None:
         await asyncio.gather(
             *(item.execution for item in self._requests.values() if item.execution is not None),

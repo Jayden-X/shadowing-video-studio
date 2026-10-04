@@ -274,9 +274,8 @@ def create_mcp(application: FastAPI) -> FastMCP:
     def get_job(kind: Literal["speech", "video"], job_id: str) -> dict[str, object]:
         """Query local generation progress and resulting media references by job ID."""
         try:
-            service = application.state.speech if kind == "speech" else application.state.video
-            return service.get(job_id)
-        except (SpeechError, VideoJobError) as exc:
+            return application.state.control.get_job(kind, job_id)
+        except (ControlError, SpeechError, VideoJobError) as exc:
             return safe_error(exc)
 
     return mcp

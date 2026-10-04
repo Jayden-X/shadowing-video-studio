@@ -1,8 +1,9 @@
 # Local MCP control
 
-Task013 adds a local control adapter. Task008's project storage and editor synchronization
-are deliberately deferred from this delivery. The owner reports an initial implementation
-on `feature/008-project-history`; this is the integration target, subject to further changes.
+Task013 adds a local control adapter on Task008's initial saved-project implementation,
+`feature/008-project-history` at commit `902bb3a`. Saved-project storage/restore remains
+supported by the existing UI and API. Only MCP project binding and editor synchronization
+are deferred from this delivery. The integration target is subject to further changes.
 Its initial API, application commands and project-history documentation have been read;
 this delivery preserves their storage/restore behavior and leaves MCP project binding
 for a later integration task. A control request is **not** a project: it contains a frozen
@@ -57,7 +58,12 @@ The payload must match the selected operation: `speech` accepts text/voice/force
 `backgroundAssetId`/`illustrationAssetId`. Extra fields and mismatched operation payloads
 fail validation. Request IDs contain 1–100 ASCII letters, digits, underscores or hyphens.
 
-Use `configurationFingerprint` from current capabilities when available. An omitted value
+The `speech` object returned by `get_capabilities` uses the same camelCase shape as
+`GET /api/speech/capabilities`: `defaultVoice`, `voices`, and each voice's `configurationFingerprint`. The MCP envelope additionally carries media readiness,
+access scope, limits, review policy and deferred MCP features; `deferred.projects` and
+`deferred.historyRecovery` concern MCP integration, not the existing saved-project UI/API.
+
+Use the selected voice's `configurationFingerprint` from current capabilities when available. An omitted value
 is resolved and frozen before review; execution revalidates it. A matching original
 request with the same ID returns its existing ticket. Different inputs with that ID fail.
 Approval applies only to the frozen payload and expires 30 minutes after creation.
@@ -114,7 +120,8 @@ still applies. No cloud service or account is added.
 Set `MCP_READ_TOKEN` and/or `MCP_EXECUTE_TOKEN` in the existing backend-only local
 environment configuration, excluded from Git. With both empty, MCP returns 404. Use
 independently generated random credentials of at least 32 characters; settings permit
-32–256 ASCII characters without whitespace, and reject identical read/execute tokens.
+32–256 printable ASCII characters (code points 33–126), excluding spaces/control
+characters, and reject identical read/execute tokens.
 Tokens are loaded at service start. Rotate them by changing configuration and restarting;
 this also invalidates transient approvals. Never place credentials in URLs or dialogue.
 
@@ -148,7 +155,10 @@ and a restrictive content policy. MCP exposes no approval operation or nonce.
 
 The credential authorizes app controls, not unrestricted local filesystem access. This
 scheme assumes the current trusted single-user Mac; it does not isolate hostile local
-processes or establish a remote multi-user security boundary. Source is returned only
+processes or establish a remote multi-user security boundary. The guarantee is that MCP
+provides no approval tool or nonce. A trusted local process with HTTP/browser access can
+automate that separate surface; use human review according to the owner's approval policy.
+Source is returned only
 where needed for authorized proposals/job inspection; keep SDK debug logging disabled.
 
 Tool schemas describe structured object results, returned in MCP `structuredContent`
