@@ -112,7 +112,9 @@ The renderer streams transparent 1260 × 180 PNG layers directly into the page's
 process and overlays them at (0, 850). Each layer has 36 black rounded bars starting at
 x=118, with 29 px pitch, 16 px width, 7 px corner radius and maximum 145 px height centered
 at y=90. There is no waveform backplate. The default background is light blue with dark
-text; uploaded backgrounds keep their dim layer and white text. Black bars may be hard to
+text. Pages without an illustration have no right-side placeholder or background dim layer;
+illustrated pages retain the panel, and uploaded backgrounds on those pages use a dim layer
+with white text. Undimmed pages use dark text. Black bars may be hard to
 see on dark uploads, so choose a light background.
 
 The project-owned standard-library analyzer uses frozen 24 kHz mono PCM16 WAVs, 800-sample

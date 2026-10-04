@@ -76,3 +76,9 @@ model and covers backend production/critical code only, excluding frontend and t
   end-to-end TTS run was performed; genuine adapter/media validation reused accepted audio.
 - Owner explicitly authorized pushing the verified branch and creating a PR in
   `Jayden-X/shadowing-video-studio` on 2026-10-04. Task remains in review until integration.
+
+## Integration
+
+PR #13 passed backend, frontend and repository-hygiene CI and was squash-merged into
+main as `055b0810fd150290d5796dc204288822a870e1b4`. The later optional-illustration
+layout correction is tracked separately in Task 012.

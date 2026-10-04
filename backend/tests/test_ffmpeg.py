@@ -196,6 +196,52 @@ def test_commands_use_fixed_relative_files_and_no_source_interpolation():
     assert 0 < int(final[final.index("-fs") + 1]) < 128 * 1024 * 1024
 
 
+@pytest.mark.parametrize(
+    ("background_filename", "illustration_filename"),
+    [
+        (None, None),
+        ("visual-0001.png", None),
+        (None, "visual-0002.webp"),
+        ("visual-0001.png", "visual-0002.webp"),
+    ],
+)
+def test_page_visual_layers_follow_illustration_presence(
+    background_filename, illustration_filename
+):
+    sentence = FrozenVideoSentence("one", "A sentence.", Path("audio.wav"), 1)
+    page = video_timeline([sentence])[0]
+    arguments = page_arguments(
+        Path("ffmpeg"),
+        page,
+        TextLayout(sentence.text, 64),
+        1,
+        background_filename=background_filename,
+        illustration_filename=illustration_filename,
+    )
+    graph = arguments[arguments.index("-filter_complex") + 1]
+    has_illustration = illustration_filename is not None
+    has_background = background_filename is not None
+
+    assert ("color=0x20334c" in graph) is has_illustration
+    dim_background = has_illustration and has_background
+    assert ("color=black@0.60" in graph) is dim_background
+    expected_font_color = "white" if dim_background else "0x173b59"
+    assert f"fontcolor={expected_font_color}" in graph
+    waveform_index = 1 + int(has_background) + int(has_illustration)
+    assert f"[{waveform_index}:v]setpts=N/(30*TB),format=rgba[wave]" in graph
+    if has_background:
+        assert "[1:v]scale=w=1920:h=1080:" in graph
+    else:
+        assert "color=c=0x9dd7f5" in graph
+    if has_illustration:
+        illustration_index = 2 if has_background else 1
+        assert f"[{illustration_index}:v]scale=w=584:h=736:" in graph
+    else:
+        assert "scale=w=584:h=736:" not in graph
+    assert "apad=pad_dur=5" in graph
+    assert page.duration_seconds == 6
+
+
 def test_storage_budget_prevents_encoding_and_never_publishes_size_limited_page(tmp_path):
     runner = FakeRunner(cap_hit=True)
     renderer, sentence, job = setup_renderer(tmp_path, runner)
