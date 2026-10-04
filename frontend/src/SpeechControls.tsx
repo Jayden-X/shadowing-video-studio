@@ -63,7 +63,7 @@ export function SentenceSpeech({ sentence, position, selection, job, binding, di
   const [playbackError, setPlaybackError] = useState(false);
   const mismatch = sentenceAudioMismatch(sentence, selection, binding);
   const priorAudio = Object.hasOwn(selection, sentence.id) ? selection[sentence.id] : undefined;
-  const playableAudio = audio ?? (priorAudio?.text === sentence.text ? priorAudio : null);
+  const playableAudio = audio;
   useEffect(() => { setPlaybackError(false); }, [playableAudio?.assetId]);
   return (
     <div className="sentence-speech" role="group" aria-label={`Speech for sentence ${position}`}>
@@ -73,8 +73,8 @@ export function SentenceSpeech({ sentence, position, selection, job, binding, di
           : progress?.status === "failed" ? progress.error
           : audio ? `Audio ready · ${audio.durationSeconds.toFixed(1)} seconds${audio.reused ? " · Reused" : ""}`
           : mismatch === "text" ? "Text changed. Generate speech again before preview or video."
-          : mismatch === "voice" ? `Saved audio uses ${priorAudio?.voice ?? "another"} voice. You can preview it, but select a supported voice and generate speech before video.`
-          : mismatch === "configuration" ? "Saved audio can be previewed, but its speech configuration does not match the current runtime. Generate speech again before video."
+          : mismatch === "voice" ? `Saved audio uses ${priorAudio?.voice ?? "another"} voice. Generate speech with the selected voice before video.`
+          : mismatch === "configuration" ? "Saved audio uses an earlier speech configuration. Generate speech again before video."
           : "No current audio. Generate speech after reviewing this sentence."}
       </p>
       {playableAudio && <audio key={playableAudio.assetId} controls preload="none" aria-label={`Preview sentence ${position}`}

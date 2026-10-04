@@ -734,7 +734,16 @@ class ProjectStore:
             "Successful media is preserved; regenerate explicitly."
         )
         for row in rows:
-            attempt = self._attempt(row)
+            try:
+                attempt = self._attempt(row)
+            except ProjectError:
+                # Keep damaged evidence, but prevent one unfinished record from
+                # making every otherwise readable project unavailable at startup.
+                connection.execute(
+                    "UPDATE attempts SET status = 'interrupted', updated_at = ? WHERE id = ?",
+                    (_now(), row["id"]),
+                )
+                continue
             job = attempt["job"]
             if job is not None:
                 if isinstance(job.get("sentences"), list):

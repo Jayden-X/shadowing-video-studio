@@ -130,3 +130,23 @@ and allow for corrective changes before final acceptance.
 The owner explicitly waived code review for Task008 on 2026-10-04. The review subagent
 was interrupted. Existing checks, focused critical-path tests, CI and actual Mac validation
 remain required; this waiver does not change the repository-wide review policy.
+
+### Validation follow-up — 2026-10-04
+
+- Frontend existing API mocks now cover project-scoped commands; all **167 tests across
+  10 files**, typecheck and production build pass. Changing voice hides audio playback
+  with a mismatched current binding while preserving the old recording.
+- Backend rerun after startup recovery fix: **202 passed, 4 skipped**. Ruff lint/format
+  pass, spike shell syntax passes, and 11 deterministic spike checks run with 1 skip.
+- A damaged unfinished attempt no longer blocks all readable projects at startup; its
+  original evidence is retained and its status becomes interrupted. A synthetic storage
+  integration check verified editor preservation and unchanged damaged evidence.
+- Draft [PR #15](https://github.com/Jayden-X/shadowing-video-studio/pull/15) is attached.
+  The first checkpoint passed backend/hygiene CI but failed frontend before the mock fixes;
+  the corrective head requires a fresh CI result.
+- Mac Task008 service deployed successfully at `http://127.0.0.1:8877/`, reusing the
+  approved existing media workspace and preserving the Mac checkout. Deployment sources,
+  logs and nonsecret settings live under project `tmp/task008-20261004-001`.
+  Subsequent SSH connections timed out, before real speech/video smoke execution could be
+  confirmed. Actual media/restart and owner browser acceptance remain **unverified**;
+  the owner was asked to restore the SSH connection. The task remains in progress.
