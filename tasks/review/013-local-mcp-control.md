@@ -110,6 +110,21 @@ session-only; saved-project tools, editor synchronization and durable request bi
 remain reserved. No scheduling or cancel/resume. No real Qwen/FFmpeg generation or paid
 provider request ran; fake providers validate controls, not media quality.
 
-Draft PR #16 targets `feature/008-project-history`; no merge was requested.
+PR #16 was merged into `feature/008-project-history` on 2026-10-04. Task008 had
+already been squash-merged into main via PR #15, so that merge did not deliver MCP to main.
 Repository hygiene, backend and frontend CI all passed on implementation head `a151729`
 (run `37199481077`). This task stays in review pending owner acceptance.
+
+## Main integration — 2026-10-05
+
+The owner requested a separate MCP PR targeting main. Branch `codex/013-mcp-main`
+replays only Task013 changes onto main `f722c3f`, preserving Task008 persistence and
+Task014 project/image cleanup without exposing cleanup or approval through MCP.
+The only rebase conflict was the task directory rename; the task remains in review.
+
+- Backend: 229 passed, one existing skip; Ruff lint/format passed.
+- Frontend: typecheck, 167 tests and production build passed; no frontend diff.
+- No real media generation, paid provider request, credential change or main merge.
+- Spike helpers: 11 passed; shell syntax and diff checks passed.
+- Locked offline dependency sync and live official SDK loopback smoke passed.
+- New PR CI and focused backend integration review will be recorded before delivery.

@@ -1,13 +1,11 @@
 # Local MCP control
 
-Task013 adds a local control adapter on Task008's initial saved-project implementation,
-`feature/008-project-history` at commit `902bb3a`. Saved-project storage/restore remains
-supported by the existing UI and API. Only MCP project binding and editor synchronization
-are deferred from this delivery. The integration target is subject to further changes.
-Its initial API, application commands and project-history documentation have been read;
-this delivery preserves their storage/restore behavior and leaves MCP project binding
-for a later integration task. A control request is **not** a project: it contains a frozen
-input snapshot for one speech/video submission, independent of the browser editor.
+Task013 adds local MCP control to the existing saved-project application on `main`.
+Task008 project persistence is already merged through PR #15; this delivery is integrated
+with main at `f722c3f`, including Task014 project and image resource cleanup. Saved-project
+storage, restore, history and explicit cleanup continue to use their existing UI/API.
+MCP project binding and editor synchronization remain deferred. A control request contains
+a frozen input snapshot for one speech/video submission, independent of the browser editor.
 
 ## Tools
 
@@ -77,7 +75,7 @@ remain subject to the existing single-heavy-job gate.
 
 ## Task008 integration seam
 
-The initial `feature/008-project-history` target implements saved projects, immutable
+The merged Task008 implementation provides saved projects, immutable
 output history and validated audio reopening through
 [ADR 0004](../architecture/decisions/0004-project-history-persistence.md) and
 [its operating guide](project-history.md). Task013 does not change that storage format.
@@ -97,7 +95,7 @@ register a saved project's history. The follow-up should use these existing cont
 - Bind MCP human review to the exact project revision and frozen generation inputs.
   Changed inputs require new review; never restore expired session approval.
 
-Re-read the target branch before implementing this mapping because it may change.
+Re-read the current project contracts on main before implementing this mapping.
 Project reopening must retain its current explicit-regeneration/no-automatic-resume policy.
 
 Service restart loses MCP tickets and transient-submission lookup metadata. Saved-project
