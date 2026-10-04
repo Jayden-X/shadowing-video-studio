@@ -17,7 +17,6 @@ from shadowing_video_studio.video_rendering import VideoRenderingError
 REQUIRED_FILTERS = frozenset(
     {
         "drawtext",
-        "showwaves",
         "overlay",
         "color",
         "aresample",
@@ -25,7 +24,6 @@ REQUIRED_FILTERS = frozenset(
         "apad",
         "atrim",
         "asetpts",
-        "asplit",
         "drawbox",
         "fps",
         "format",
@@ -38,6 +36,8 @@ REQUIRED_FILTERS = frozenset(
 )
 REQUIRED_ENCODERS = frozenset({"libx264", "pcm_s16le", "aac"})
 REQUIRED_MUXERS = frozenset({"mp4", "matroska"})
+REQUIRED_DECODERS = frozenset({"png"})
+REQUIRED_DEMUXERS = frozenset({"image2pipe"})
 REQUIRED_BITSTREAM_FILTERS = frozenset({"setts"})
 REQUIRED_DRAWTEXT_OPTIONS = frozenset(
     {"fontfile", "textfile", "expansion", "fontsize", "fontcolor", "x", "y", "line_spacing"}
@@ -113,6 +113,8 @@ class VideoToolPreflight:
                         ("-filters", REQUIRED_FILTERS, "filters"),
                         ("-encoders", REQUIRED_ENCODERS, "encoders"),
                         ("-muxers", REQUIRED_MUXERS, "muxers"),
+                        ("-decoders", REQUIRED_DECODERS, "decoders"),
+                        ("-demuxers", REQUIRED_DEMUXERS, "demuxers"),
                         ("-bsfs", REQUIRED_BITSTREAM_FILTERS, "bitstream filters"),
                     ):
                         result = await self.runner.run(

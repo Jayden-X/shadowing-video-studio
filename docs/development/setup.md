@@ -9,7 +9,7 @@ Required:
 - uv.
 - Node.js 22.12+.
 - npm.
-- A FFmpeg build with `drawtext`, `showwaves`, `libx264` and AAC (see video runtime setup).
+- A FFmpeg build with `drawtext`, PNG decoding/image2pipe, `libx264` and AAC (see video runtime setup).
 
 The repository contains `.python-version` and `.nvmrc` as local tool hints.
 

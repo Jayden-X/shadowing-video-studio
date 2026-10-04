@@ -5,7 +5,7 @@ import json
 import os
 import signal
 import subprocess
-from collections.abc import Mapping, Sequence
+from collections.abc import AsyncIterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -46,8 +46,11 @@ class SubprocessRunner:
         environment: Mapping[str, str],
         timeout: float,
         source: bytes | None = None,
+        source_stream: AsyncIterable[bytes] | None = None,
         inspect_events: bool = False,
     ) -> ProcessResult:
+        if source is not None and source_stream is not None:
+            raise ValueError("Choose one process input source")
         job = WindowsJob() if os.name == "nt" else None
         options = {"start_new_session": True}
         if job:
@@ -64,7 +67,9 @@ class SubprocessRunner:
                 *arguments,
                 cwd=cwd,
                 env=dict(environment),
-                stdin=asyncio.subprocess.PIPE if source is not None else asyncio.subprocess.DEVNULL,
+                stdin=asyncio.subprocess.PIPE
+                if source is not None or source_stream is not None
+                else asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 **options,
@@ -104,8 +109,13 @@ class SubprocessRunner:
         async def write() -> None:
             if process.stdin is not None:
                 try:
-                    process.stdin.write(source or b"")
-                    await process.stdin.drain()
+                    if source_stream is not None:
+                        async for chunk in source_stream:
+                            process.stdin.write(chunk)
+                            await process.stdin.drain()
+                    else:
+                        process.stdin.write(source or b"")
+                        await process.stdin.drain()
                 except (BrokenPipeError, ConnectionResetError):
                     pass
                 finally:

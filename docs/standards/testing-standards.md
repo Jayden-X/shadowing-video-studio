@@ -17,6 +17,9 @@ The owner selected a focused test approach for the current MVP:
   UI string, style, setter, or implementation detail.
 - Defer low-impact edge cases and cosmetic assertions. Record a material unverified risk
   explicitly rather than expanding the suite to cover every possible variation.
+- Focus new unit tests on backend logic and critical code; frontend and other low-impact
+  logic do not require detailed new unit coverage. Delegate frontend and unit-test work to
+  GPT-6 Luna with max reasoning, as recorded in the agent operating model.
 - Use actual model/media integration evidence for the main path when available; it
   complements the focused deterministic checks and must not be reported as unit-test proof.
 

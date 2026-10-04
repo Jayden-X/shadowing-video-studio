@@ -102,7 +102,10 @@ export function BackgroundImageControls({ visuals, value, onChange, disabled }: 
       <div className="visual-library-heading">
         <div>
           <h3 id="background-image-title">Video background</h3>
-          <p className="field-help">The selected image applies throughout the video. Sentence illustrations appear on the right of their pages.</p>
+          <p className="field-help">
+            The selected image applies throughout the video. Light backgrounds keep the animated
+            black frequency bars clear; sentence illustrations appear on the right.
+          </p>
         </div>
         <button type="button" disabled={visuals.checking} onClick={visuals.refresh}>Refresh image library</button>
       </div>

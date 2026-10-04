@@ -164,7 +164,11 @@ def test_commands_use_fixed_relative_files_and_no_source_interpolation():
     graph = arguments[arguments.index("-filter_complex") + 1]
     assert "private" not in graph
     assert "expansion=none" in graph and "textfile=page-0001.txt" in graph
-    assert "fontfile=font.ttf" in graph and "showwaves=" in graph and "apad=pad_dur=5" in graph
+    assert "fontfile=font.ttf" in graph and "showwaves=" not in graph and "apad=pad_dur=5" in graph
+    assert "[1:v]setpts=N/(30*TB),format=rgba[wave]" in graph
+    assert "overlay=x=0:y=850:eof_action=pass:repeatlast=0" in graph
+    assert "color=c=0x9dd7f5" in graph and "fontcolor=0x173b59" in graph
+    assert "drawbox=x=96:y=852" not in graph
     assert "text_shaping=0" in graph
     unshaped = page_arguments(
         Path("/configured/ffmpeg"),
@@ -178,9 +182,13 @@ def test_commands_use_fixed_relative_files_and_no_source_interpolation():
     assert "1920x1080" in graph and "-n" in arguments and "-y" not in arguments
     assert int(arguments[arguments.index("-fs") + 1]) > 0
     assert arguments[arguments.index("-i") + 1] == "audio-0001.wav"
+    assert arguments[-1] == "page-0001.mkv"
+    assert arguments[arguments.index("-i", arguments.index("-i") + 1) + 1] == "pipe:0"
+    assert "image2pipe" in arguments and "-c:v" in arguments and "png" in arguments
     final = concat_arguments(Path("/configured/ffmpeg"))
     assert final[final.index("-c:a") + 1] == "aac"
     assert final[final.index("-safe") + 1] == "1"
+    assert final[final.index("-r") + 1] == "30"
     assert final[final.index("-bsf:v") + 1] == (
         "setts=pts=round(PTS*TB*30):dts=round(DTS*TB*30):duration=1:time_base=1/30"
     )
@@ -264,10 +272,14 @@ def test_selected_images_are_frozen_checked_and_use_contain_cover_graph(tmp_path
     for arguments in pages:
         graph = arguments[arguments.index("-filter_complex") + 1]
         inputs = [arguments[index + 1] for index, value in enumerate(arguments) if value == "-i"]
-        assert inputs[1:] == ["visual-0001.png", "visual-0002.webp"]
-        assert "private" not in graph and "private" not in " ".join(arguments)
+        assert inputs[1:-1] == ["visual-0001.png", "visual-0002.webp"]
+        assert inputs[-1] == "pipe:0"
+        command = " ".join(arguments)
+        assert "private" not in graph
+        assert background_path.name not in command and illustration_path.name not in command
         assert "force_original_aspect_ratio=increase" in graph and "crop=w=1920:h=1080" in graph
         assert "color=black@0.60" in graph and "force_original_aspect_ratio=decrease" in graph
+        assert "fontcolor=white" in graph
         assert (
             "format=rgb24,drawbox=x=0:y=0:w=iw:h=ih:color=black@0.60:t=fill,format=yuv420p" in graph
         )

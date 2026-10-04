@@ -20,7 +20,7 @@ VIDEO_TIMEOUT_SECONDS=600
 FRONTEND_DIST_DIR=/absolute/path/to/frontend/dist
 ```
 
-Use a FFmpeg build with `drawtext` (FreeType/Harfbuzz), `showwaves`, H.264/AAC encoding,
+Use a FFmpeg build with `drawtext` (FreeType/Harfbuzz), PNG decoding/image2pipe, H.264/AAC encoding,
 and the other fixed-template filters. An executable path alone does not prove these
 capabilities. The target Mac's `/opt/homebrew/bin/ffmpeg` build lacks `drawtext` and cannot
 render this template. The Arial font is `/System/Library/Fonts/Supplemental/Arial.ttf`.
@@ -105,3 +105,25 @@ asset ID while leaving the first MP4 byte-identical. The corrective final backen
 passed (172 tests, two Windows symlink permission skips); final PR CI is a squash gate.
 Deterministic tests cover key command/timeline/binding/lock/failure/export cases; CI does not
 install Qwen, download weights, or require a real FFmpeg encoding run.
+
+## Reference frequency bars (Task 011)
+
+The renderer streams transparent 1260 × 180 PNG layers directly into the page's FFmpeg
+process and overlays them at (0, 850). Each layer has 36 black rounded bars starting at
+x=118, with 29 px pitch, 16 px width, 7 px corner radius and maximum 145 px height centered
+at y=90. There is no waveform backplate. The default background is light blue with dark
+text; uploaded backgrounds keep their dim layer and white text. Black bars may be hard to
+see on dark uploads, so choose a light background.
+
+The project-owned standard-library analyzer uses frozen 24 kHz mono PCM16 WAVs, 800-sample
+Hann windows at 30 fps, a 2048-point FFT and 36 logarithmic bands from 80 to 8000 Hz.
+Per-band RMS magnitude is square-root normalized by the strongest band, combined with
+`min(1, audio_rms * 9)`, and mapped to the reference heights. RMS <= 0.001 yields a fully
+transparent frame. Frames after audio EOF, including the five-second pause and any final
+frame quantization padding, are transparent. A partial final audio window is zero-padded.
+
+Eight-frame batches are computed off the event loop and written with pipe backpressure.
+Only a bounded batch/frame is held in memory; there are no frame files or new dependencies.
+The existing page process owns encoding, timeouts, cancellation and output size limits.
+Capability preflight checks PNG decoding and image2pipe rather than requiring showwaves.
+EOF and exceptions in the input stream still use the existing owned-process cleanup.
