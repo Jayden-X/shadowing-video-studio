@@ -132,8 +132,24 @@ export function createProjectApiTestServer() {
     audio = [...currentAudio.values()];
     attempts.set(body.operationToken, { id: job.id, projectId: project.id, documentId: snapshot.documentId, kind: "speech",
       status: job.status, job: decorated, submissionToken: body.operationToken, revision: project.revision,
-      snapshot, createdAt: CREATED_AT, updatedAt: timestamp() });
+      snapshot: { editor: snapshot, request: { configurationFingerprint: body.configurationFingerprint,
+        singleSentenceId }, media: {} },
+      createdAt: CREATED_AT, updatedAt: timestamp() });
     return response(decorated, baseResponse.status);
+  }
+
+  async function recordSpeechPoll(jobId: string, result: Response): Promise<Response> {
+    if (!result.ok) return result;
+    const source = [...attempts.values()].find((attempt) => attempt.kind === "speech" && attempt.id === jobId);
+    if (!source || !isRecord(source.job)) return result;
+    const job = responseJson(await result.clone().json().catch(() => null));
+    const decorated: JsonRecord = { ...job, projectId: source.projectId, documentId: source.documentId,
+      projectRevision: source.revision, submissionToken: source.submissionToken };
+    source.job = decorated;
+    source.status = decorated.status;
+    source.updatedAt = timestamp();
+    attempts.set(String(source.submissionToken), source);
+    return response(decorated, result.status);
   }
 
   async function submitVideo(url: string, init: RequestInit | undefined, create: VideoCreator): Promise<Response | null> {
@@ -174,7 +190,7 @@ export function createProjectApiTestServer() {
     return result;
   }
 
-  return { handleStorage, submitSpeech, submitVideo, recordVideoPoll };
+  return { handleStorage, submitSpeech, recordSpeechPoll, submitVideo, recordVideoPoll };
 }
 
 export const TEST_PROJECT_ID = PROJECT_ID;
