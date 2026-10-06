@@ -59,5 +59,12 @@ GPT-6 Luna/max as required by the repository standards.
   and backend virtual environment tools because `npm` and `uv` were unavailable on PATH.
 - Frontend code and tests are excluded from independent code review by the current
   repository review policy. No backend production logic changed.
-- Ready for delivery review. No PR, remote CI, merge, deployment or real Qwen/browser smoke
-  run was performed; this fix uses deterministic frontend regression evidence.
+- Delivery PR: [#21](https://github.com/Jayden-X/shadowing-video-studio/pull/21).
+- On 2026-10-06, updated the existing Mac service's frontend under
+  `tmp/task014-20261004-003/source/dist` with the verified build. Preserved the previous
+  index under ignored `tmp/task015-local-run/previous-index.html` and kept old hashed
+  assets. No service restart, project write or media generation was needed.
+- `http://127.0.0.1:8877/` serves index/JavaScript bytes identical to the fixed build;
+  `/api/health` returns `ok`, and speech status reports available. Requested opening the
+  page in Codex. Real Qwen generation/browser workflow smoke was not rerun.
+- Ready for delivery review; remote CI and merge are not yet confirmed.
