@@ -42,6 +42,12 @@ When changing behavior:
 - test unhappy paths when failure has meaningful consequences
 - keep tests deterministic
 
+When strict API response validation distinguishes ordinary and project-bound jobs, cover
+the same project DTO through submission, polling and explicit recovery. Test doubles must
+retain project metadata in later responses and match backend optional-field encoding
+(for example, `singleSentenceId: null` for whole-document speech). Use a multi-sentence
+recovery case so an accidental single-sentence restriction cannot pass unnoticed.
+
 ## External services
 
 Normal tests must not require:

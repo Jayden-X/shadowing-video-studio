@@ -3,15 +3,16 @@ import type { SentenceItem } from "./domain/sentences";
 import { selectJobAudio, type SpeechAudio, type SpeechBinding, type SpeechJob, type SpeechSelection } from "./domain/speech";
 import { getProjectAttempt } from "./projectApi";
 import type { ProjectAudio, ProjectSubmissionContext } from "./projectApi";
-import { createProjectSpeechJob, createSpeechJob, getSpeechCapabilities, getSpeechJob, getSpeechStatus, SpeechApiError,
-  validateProjectSpeechAttemptJob, type ProjectSpeechJob, type SpeechCapabilities, type SpeechStatus } from "./speechApi";
+import { createProjectSpeechJob, createSpeechJob, getProjectSpeechJob, getSpeechCapabilities, getSpeechJob,
+  getSpeechStatus, SpeechApiError, validateProjectSpeechAttemptJob, type ProjectSpeechJobExpectation,
+  type ProjectSpeechJob, type SpeechCapabilities, type SpeechStatus } from "./speechApi";
 
 const POLL_INTERVAL_MS = 1_000;
 const WAIT_LIMIT_MS = 15 * 60_000;
 const STATUS_LIMIT_MS = 15_000;
 
 type Attempt = { snapshot: SentenceItem[]; binding: SpeechBinding; scope: number; jobId: string | null;
-  project: ProjectSubmissionContext | null; kind: "speech"; };
+  project: ProjectSubmissionContext | null; projectRevision: number | null; kind: "speech"; };
 
 export function useSpeech() {
   const [readiness, setReadiness] = useState<SpeechStatus | null>(null);
@@ -140,7 +141,10 @@ export function useSpeech() {
     if (!mounted.current || sequence.current !== token || signal.aborted) return;
     current.jobId = result.id;
     setJob(result);
-    if ("projectRevision" in result) current.project?.onAccepted?.(result.projectRevision);
+    if ("projectRevision" in result) {
+      current.projectRevision = result.projectRevision;
+      current.project?.onAccepted?.(result.projectRevision);
+    }
     if (current.scope === scope.current) setSelection((previous) => selectJobAudio(previous, result));
     if (result.status === "completed" || result.status === "failed") {
       attempt.current = null;
@@ -173,7 +177,21 @@ export function useSpeech() {
 
   async function poll(current: Attempt, token: number, signal: AbortSignal) {
     if (!current.jobId || signal.aborted || token !== sequence.current) return;
-    try { receive(await getSpeechJob(current.jobId, current.snapshot, current.binding, signal), current, token, signal); }
+    try {
+      let result: SpeechJob | ProjectSpeechJob;
+      if (current.project) {
+        if (current.projectRevision === null) throw new SpeechApiError("The local service returned invalid speech progress.");
+        result = await getProjectSpeechJob(current.jobId, current.snapshot, current.binding, {
+          projectId: current.project.projectId,
+          documentId: current.project.documentId,
+          submissionToken: current.project.submissionToken,
+          revision: { exact: current.projectRevision },
+        }, signal);
+      } else {
+        result = await getSpeechJob(current.jobId, current.snapshot, current.binding, signal);
+      }
+      receive(result, current, token, signal);
+    }
     catch (errorValue: unknown) { fail(errorValue, token, signal); }
   }
 
@@ -193,7 +211,7 @@ export function useSpeech() {
     if (controller.current || attempt.current || !readiness?.available || !capabilities?.available || !voice) return;
     const binding: SpeechBinding = { voice: voice.id, configurationFingerprint: voice.configurationFingerprint };
     const current: Attempt = { snapshot: sentences.map(({ id, text }) => ({ id, text })), binding, scope: scope.current,
-      jobId: null, project: project ? { ...project } : null, kind: "speech" };
+      jobId: null, project: project ? { ...project } : null, projectRevision: null, kind: "speech" };
     attempt.current = current;
     setJob(null);
     const { token, signal } = beginWaiting();
@@ -217,7 +235,7 @@ export function useSpeech() {
   function restorePendingSubmission(project: ProjectSubmissionContext) {
     if (attempt.current) return false;
     attempt.current = { snapshot: [], binding: { voice: "", configurationFingerprint: "" }, scope: scope.current,
-      jobId: null, project: { ...project }, kind: "speech" };
+      jobId: null, project: { ...project }, projectRevision: null, kind: "speech" };
     setJob(null);
     setError("");
     setNotice(`Speech submission for ${project.projectName} needs its saved status checked. It will not be resubmitted automatically.`);
@@ -231,26 +249,48 @@ export function useSpeech() {
       const attemptRecord = await getProjectAttempt(project.projectId, project.submissionToken, signal);
       if (signal.aborted || token !== sequence.current) return;
       if (attemptRecord.kind !== "speech") throw new SpeechApiError("This submission token belongs to a different generation type.");
+      if (attemptRecord.documentId !== project.documentId) throw new SpeechApiError("The local service returned a speech attempt for a different document.");
       project.onAccepted?.(attemptRecord.revision);
       if (attemptRecord.job === null) {
         finishWaiting();
         setNotice(`Speech submission for ${project.projectName} is recorded, but no job status is available yet. Check again later; it was not resubmitted.`);
         return;
       }
-      if (!isRecord(attemptRecord.job) || !Array.isArray(attemptRecord.job.sentences)
-        || typeof attemptRecord.job.voice !== "string" || typeof attemptRecord.job.configurationFingerprint !== "string") {
+      const frozen = attemptRecord.snapshot;
+      if (!isRecord(attemptRecord.job) || !isRecord(frozen) || !isRecord(frozen.editor) || !isRecord(frozen.request)
+        || !isRecord(frozen.editor.document) || !Array.isArray(frozen.editor.document.sentences)
+        || frozen.editor.documentId !== attemptRecord.documentId || typeof frozen.editor.voice !== "string"
+        || typeof frozen.request.configurationFingerprint !== "string") {
         throw new SpeechApiError("The local service returned invalid speech attempt details.");
       }
-      const attemptSnapshot = (attemptRecord.job.sentences as unknown[]).map((sentence) => {
+      const attemptSnapshot = (frozen.editor.document.sentences as unknown[]).map((sentence) => {
         if (!isRecord(sentence) || typeof sentence.id !== "string" || typeof sentence.text !== "string") {
           throw new SpeechApiError("The local service returned invalid speech attempt details.");
         }
         return { id: sentence.id, text: sentence.text };
       });
-      current.snapshot = attemptSnapshot;
-      current.binding = { voice: attemptRecord.job.voice, configurationFingerprint: attemptRecord.job.configurationFingerprint };
-      current.jobId = typeof attemptRecord.job.id === "string" ? attemptRecord.job.id : null;
-      const result = validateProjectSpeechAttemptJob(attemptRecord.job, current.snapshot, current.binding);
+      const selectedSentenceId = frozen.request.singleSentenceId;
+      const isSingleSentenceAttempt = selectedSentenceId !== undefined && selectedSentenceId !== null;
+      const expectedSnapshot = !isSingleSentenceAttempt
+        ? attemptSnapshot
+        : typeof selectedSentenceId === "string" ? attemptSnapshot.filter(({ id }) => id === selectedSentenceId) : [];
+      if (expectedSnapshot.length === 0 || (isSingleSentenceAttempt && expectedSnapshot.length !== 1)) {
+        throw new SpeechApiError("The local service returned invalid speech attempt details.");
+      }
+      const binding: SpeechBinding = { voice: frozen.editor.voice,
+        configurationFingerprint: frozen.request.configurationFingerprint };
+      const expectation: ProjectSpeechJobExpectation = {
+        projectId: project.projectId,
+        documentId: attemptRecord.documentId,
+        submissionToken: project.submissionToken,
+        revision: { exact: attemptRecord.revision },
+      };
+      const result = validateProjectSpeechAttemptJob(attemptRecord.job, expectedSnapshot, binding, expectation);
+      if (result.id !== attemptRecord.id) throw new SpeechApiError("The local service returned invalid speech attempt details.");
+      current.snapshot = expectedSnapshot;
+      current.binding = binding;
+      current.jobId = result.id;
+      current.projectRevision = attemptRecord.revision;
       receive(result, current, token, signal);
     } catch (errorValue: unknown) {
       fail(errorValue, token, signal);

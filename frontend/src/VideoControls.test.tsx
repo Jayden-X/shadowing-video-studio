@@ -107,6 +107,27 @@ describe("video export workflow", () => {
     fireEvent.error(document.querySelector("video")!);
     expect(screen.getAllByRole("alert").some((alert) => alert.textContent?.includes("export could not be played"))).toBe(true);
   });
+  it("recovers a saved Project Video Job by token using the frozen editor sentence count", async () => {
+    const fetchMock = mockVideo((snapshot) => json(videoJob(snapshot.length, "running"), 202),
+      () => json(videoJob(2, "completed", firstExport)));
+    const firstView = render(<App />);
+    await prepare("Hello. Next.");
+    await generateSpeech();
+    await act(async () => { fireEvent.click(button("Generate video")); });
+    expect(button("Stop waiting for video")).toBeTruthy();
+    firstView.unmount();
+
+    render(<App />);
+    await act(async () => {});
+    await act(async () => { fireEvent.click(button("Open last project")); });
+    expect(button("Resume video monitoring")).toBeTruthy();
+    await act(async () => { fireEvent.click(button("Resume video monitoring")); });
+
+    expect(fetchMock.mock.calls.filter(([url]) => url === `/api/projects/${TEST_PROJECT_ID}/video`)).toHaveLength(1);
+    expect(fetchMock.mock.calls.filter(([url]) => url.startsWith(`/api/projects/${TEST_PROJECT_ID}/attempts/`))).toHaveLength(1);
+    expect(document.querySelector("video")?.getAttribute("src")).toBe(`/api/video/assets/${firstExport}`);
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
   it("serializes clicks and keeps a late export accessible without changing a replacement document", async () => {
     vi.useFakeTimers();
     let total = 0;

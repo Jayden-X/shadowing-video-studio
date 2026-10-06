@@ -26,6 +26,12 @@ export type ProjectVideoCommand = {
   snapshot: ProjectSnapshot;
   submissionToken: string;
 };
+export type ProjectVideoJobExpectation = {
+  projectId: string;
+  documentId: string;
+  submissionToken: string;
+  revision: { minimum: number } | { exact: number };
+};
 export class VideoApiError extends Error {
   constructor(message: string, readonly status?: number) { super(message); }
 }
@@ -73,8 +79,9 @@ export async function getVideoStatus(signal?: AbortSignal): Promise<VideoStatus>
   if (!isRecord(value) || !exactKeys(value, ["available", "reason"]) || typeof value.available !== "boolean" || !isSafeError(value.reason)) throw new VideoApiError(INVALID);
   return { available: value.available, reason: value.available ? null : UNAVAILABLE };
 }
-function validateJob(value: unknown, total: number, expectedId?: string, projectCommand?: ProjectVideoCommand): VideoJob | ProjectVideoJob {
-  const expectedKeys = projectCommand
+function validateJob(value: unknown, total: number, expectedId?: string,
+  projectExpectation?: ProjectVideoJobExpectation): VideoJob | ProjectVideoJob {
+  const expectedKeys = projectExpectation
     ? ["id", "status", "completedSentences", "totalSentences", "assetId", "durationSeconds", "error", "projectId", "documentId", "projectRevision", "submissionToken"]
     : ["id", "status", "completedSentences", "totalSentences", "assetId", "durationSeconds", "error"];
   if (!isRecord(value) || !exactKeys(value, expectedKeys)
@@ -92,12 +99,21 @@ function validateJob(value: unknown, total: number, expectedId?: string, project
   }
   const job: VideoJob = { id: value.id, status: value.status, completedSentences: value.completedSentences, totalSentences: total,
     assetId: value.assetId, durationSeconds: value.durationSeconds, error: value.error === null ? null : FAILED };
-  if (projectCommand) {
-    if (value.projectId !== projectCommand.projectId || value.documentId !== projectCommand.documentId
-      || !Number.isSafeInteger(value.projectRevision) || (value.projectRevision as number) < projectCommand.expectedRevision
-      || value.submissionToken !== projectCommand.submissionToken) throw new VideoApiError(INVALID);
-    return { ...job, projectId: projectCommand.projectId, documentId: projectCommand.documentId,
-      projectRevision: value.projectRevision as number, submissionToken: projectCommand.submissionToken };
+  if (projectExpectation) {
+    const projectRevision = value.projectRevision;
+    const expectedRevision = "exact" in projectExpectation.revision
+      ? projectExpectation.revision.exact : projectExpectation.revision.minimum;
+    const validRevision = typeof projectRevision === "number" && Number.isSafeInteger(projectRevision)
+      && Number.isSafeInteger(expectedRevision) && expectedRevision >= 0 && projectRevision >= 0
+      && ("exact" in projectExpectation.revision
+        ? projectRevision === projectExpectation.revision.exact
+        : projectRevision >= projectExpectation.revision.minimum);
+    if (!opaqueId.test(projectExpectation.projectId) || !opaqueId.test(projectExpectation.documentId)
+      || !opaqueId.test(projectExpectation.submissionToken)
+      || value.projectId !== projectExpectation.projectId || value.documentId !== projectExpectation.documentId
+      || !validRevision || value.submissionToken !== projectExpectation.submissionToken) throw new VideoApiError(INVALID);
+    return { ...job, projectId: projectExpectation.projectId, documentId: projectExpectation.documentId,
+      projectRevision: projectRevision as number, submissionToken: projectExpectation.submissionToken };
   }
   return job;
 }
@@ -147,6 +163,9 @@ export async function createProjectVideoJob(
     || (command.snapshot.backgroundAssetId != null && !opaqueId.test(command.snapshot.backgroundAssetId))) {
     throw new VideoApiError("Every selected image must have a valid local asset.");
   }
+  if (!opaqueId.test(command.projectId) || !opaqueId.test(command.documentId) || !opaqueId.test(command.submissionToken)
+    || command.snapshot.documentId !== command.documentId || !Number.isSafeInteger(command.expectedRevision)
+    || command.expectedRevision < 0) throw new VideoApiError(INVALID);
   const audioAssetIds = Object.fromEntries(sentences.map((sentence) => [sentence.id, sentence.assetId]));
   const value = await requestJson(`/api/projects/${command.projectId}/video`, {
     method: "POST", headers: { "Content-Type": "application/json" },
@@ -159,7 +178,23 @@ export async function createProjectVideoJob(
       audioAssetIds,
     }), signal,
   });
-  return validateJob(value, sentences.length, undefined, command) as ProjectVideoJob;
+  return validateJob(value, sentences.length, undefined, {
+    projectId: command.projectId,
+    documentId: command.documentId,
+    submissionToken: command.submissionToken,
+    revision: { minimum: command.expectedRevision },
+  }) as ProjectVideoJob;
+}
+
+export function validateProjectVideoAttemptJob(value: unknown, total: number, expectation: ProjectVideoJobExpectation,
+  expectedId: string): ProjectVideoJob {
+  return validateJob(value, total, expectedId, expectation) as ProjectVideoJob;
+}
+
+export async function getProjectVideoJob(id: string, total: number, expectation: ProjectVideoJobExpectation,
+  signal?: AbortSignal): Promise<ProjectVideoJob> {
+  if (!opaqueId.test(id)) throw new VideoApiError(INVALID);
+  return validateJob(await requestJson(`/api/video/jobs/${id}`, { signal }), total, id, expectation) as ProjectVideoJob;
 }
 
 export async function getVideoJob(id: string, total: number, signal?: AbortSignal): Promise<VideoJob> {
