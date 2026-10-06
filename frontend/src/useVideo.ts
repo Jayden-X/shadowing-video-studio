@@ -2,13 +2,15 @@ import { useEffect, useRef, useState } from "react";
 import type { SpeechBinding } from "./domain/speech";
 import { getProjectAttempt } from "./projectApi";
 import type { ProjectSubmissionContext } from "./projectApi";
-import { createProjectVideoJob, createVideoJob, getVideoJob, getVideoStatus, VideoApiError, type ProjectVideoJob, type VideoJob, type VideoSentence, type VideoStatus } from "./videoApi";
+import { createProjectVideoJob, createVideoJob, getProjectVideoJob, getVideoJob, getVideoStatus, VideoApiError,
+  validateProjectVideoAttemptJob, type ProjectVideoJobExpectation, type ProjectVideoJob, type VideoJob,
+  type VideoSentence, type VideoStatus } from "./videoApi";
 
 const WAIT_LIMIT_MS = 30 * 60_000;
 const POLL_INTERVAL_MS = 1_000;
 const STATUS_LIMIT_MS = 15_000;
 type Attempt = { snapshot: VideoSentence[]; binding: SpeechBinding; backgroundAssetId: string | null; scope: number; jobId: string | null;
-  project: ProjectSubmissionContext | null; kind: "video"; };
+  project: ProjectSubmissionContext | null; projectRevision: number | null; kind: "video"; };
 export type VideoExport = { assetId: string; durationSeconds: number; sentenceCount: number };
 
 export function useVideo() {
@@ -104,7 +106,10 @@ export function useVideo() {
     if (!mounted.current || token !== sequence.current || signal.aborted) return;
     current.jobId = result.id;
     setJob(result);
-    if ("projectRevision" in result) current.project?.onAccepted?.(result.projectRevision);
+    if ("projectRevision" in result) {
+      current.projectRevision = result.projectRevision;
+      current.project?.onAccepted?.(result.projectRevision);
+    }
     if (result.status === "completed" || result.status === "failed") {
       attempt.current = null;
       finishWaiting();
@@ -129,7 +134,21 @@ export function useVideo() {
   }
   async function poll(current: Attempt, token: number, signal: AbortSignal) {
     if (!current.jobId || signal.aborted || token !== sequence.current) return;
-    try { receive(await getVideoJob(current.jobId, current.snapshot.length, signal), current, token, signal); }
+    try {
+      let result: VideoJob | ProjectVideoJob;
+      if (current.project) {
+        if (current.projectRevision === null) throw new VideoApiError("The local service returned invalid video progress.");
+        result = await getProjectVideoJob(current.jobId, current.snapshot.length, {
+          projectId: current.project.projectId,
+          documentId: current.project.documentId,
+          submissionToken: current.project.submissionToken,
+          revision: { exact: current.projectRevision },
+        }, signal);
+      } else {
+        result = await getVideoJob(current.jobId, current.snapshot.length, signal);
+      }
+      receive(result, current, token, signal);
+    }
     catch (value: unknown) { fail(value, token, signal); }
   }
   function beginWaiting() {
@@ -152,6 +171,7 @@ export function useVideo() {
       scope: scope.current,
       jobId: null,
       project: project ? { ...project } : null,
+      projectRevision: null,
       kind: "video",
     };
     attempt.current = current;
@@ -175,7 +195,7 @@ export function useVideo() {
   function restorePendingSubmission(project: ProjectSubmissionContext) {
     if (attempt.current) return false;
     attempt.current = { snapshot: [], binding: { voice: "", configurationFingerprint: "" }, backgroundAssetId: null,
-      scope: scope.current, jobId: null, project: { ...project }, kind: "video" };
+      scope: scope.current, jobId: null, project: { ...project }, projectRevision: null, kind: "video" };
     setJob(null);
     setError("");
     setNotice(`Video submission for ${project.projectName} needs its saved status checked. It will not be resubmitted automatically.`);
@@ -188,19 +208,32 @@ export function useVideo() {
       const attemptRecord = await getProjectAttempt(project.projectId, project.submissionToken, signal);
       if (signal.aborted || token !== sequence.current) return;
       if (attemptRecord.kind !== "video") throw new VideoApiError("This submission token belongs to a different generation type.");
-      project.onAccepted?.(attemptRecord.revision);
+      if (attemptRecord.documentId !== project.documentId) throw new VideoApiError("The local service returned a video attempt for a different document.");
       if (attemptRecord.job === null) {
         finishWaiting();
         setNotice(`Video submission for ${project.projectName} is recorded, but no job status is available yet. Check again later; it was not resubmitted.`);
         return;
       }
-      if (!isRecord(attemptRecord.job) || typeof attemptRecord.job.id !== "string"
-        || typeof attemptRecord.job.totalSentences !== "number" || !Number.isInteger(attemptRecord.job.totalSentences)) {
+      const frozen = attemptRecord.snapshot;
+      if (!isRecord(attemptRecord.job) || !isRecord(frozen) || !isRecord(frozen.editor)
+        || !isRecord(frozen.editor.document) || !Array.isArray(frozen.editor.document.sentences)
+        || frozen.editor.documentId !== attemptRecord.documentId) {
         throw new VideoApiError("The local service returned invalid video attempt details.");
       }
-      current.jobId = attemptRecord.job.id;
-      current.snapshot = Array.from({ length: attemptRecord.job.totalSentences }, () => ({ id: "", text: "", assetId: "" }));
-      receive(await getVideoJob(current.jobId, current.snapshot.length, signal), current, token, signal);
+      const totalSentences = frozen.editor.document.sentences.length;
+      if (totalSentences < 1 || totalSentences > 100) throw new VideoApiError("The local service returned invalid video attempt details.");
+      const expectation: ProjectVideoJobExpectation = {
+        projectId: project.projectId,
+        documentId: attemptRecord.documentId,
+        submissionToken: project.submissionToken,
+        revision: { exact: attemptRecord.revision },
+      };
+      validateProjectVideoAttemptJob(attemptRecord.job, totalSentences, expectation, attemptRecord.id);
+      project.onAccepted?.(attemptRecord.revision);
+      current.jobId = attemptRecord.id;
+      current.snapshot = Array.from({ length: totalSentences }, () => ({ id: "", text: "", assetId: "" }));
+      current.projectRevision = attemptRecord.revision;
+      receive(await getProjectVideoJob(current.jobId, totalSentences, expectation, signal), current, token, signal);
     } catch (value: unknown) {
       fail(value, token, signal);
     }

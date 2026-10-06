@@ -170,7 +170,9 @@ export function createProjectApiTestServer() {
       projectRevision: project.revision, submissionToken: body.operationToken };
     const attempt = { id: job.id, projectId: project.id, documentId: snapshot.documentId, kind: "video",
       status: job.status, job: decorated, submissionToken: body.operationToken, revision: project.revision,
-      snapshot, createdAt: CREATED_AT, updatedAt: timestamp() };
+      snapshot: { editor: snapshot, request: { configurationFingerprint: body.configurationFingerprint,
+        audioAssetIds: audioBySentence }, media: {} },
+      createdAt: CREATED_AT, updatedAt: timestamp() };
     attempts.set(body.operationToken, attempt);
     if (job.status === "completed" && typeof job.assetId === "string" && typeof job.durationSeconds === "number") {
       addHistory(job, snapshot, body);
@@ -179,15 +181,22 @@ export function createProjectApiTestServer() {
   }
 
   async function recordVideoPoll(jobId: string, result: Response): Promise<Response> {
-    const source = pendingVideos.get(jobId);
-    if (source && result.ok) {
-      const job = responseJson(await result.clone().json().catch(() => null));
-      if (job.status === "completed") {
-        addHistory(job, source.snapshot, source.request);
-        pendingVideos.delete(jobId);
-      }
+    if (!result.ok) return result;
+    const videoSource = pendingVideos.get(jobId);
+    const attempt = [...attempts.values()].find((item) => item.kind === "video" && item.id === jobId);
+    const job = responseJson(await result.clone().json().catch(() => null));
+    if (!attempt) return result;
+    const decorated: JsonRecord = { ...job, projectId: attempt.projectId, documentId: attempt.documentId,
+      projectRevision: attempt.revision, submissionToken: attempt.submissionToken };
+    attempt.job = decorated;
+    attempt.status = decorated.status;
+    attempt.updatedAt = timestamp();
+    attempts.set(String(attempt.submissionToken), attempt);
+    if (videoSource && decorated.status === "completed") {
+      addHistory(decorated, videoSource.snapshot, videoSource.request);
+      pendingVideos.delete(jobId);
     }
-    return result;
+    return response(decorated, result.status);
   }
 
   return { handleStorage, submitSpeech, recordSpeechPoll, submitVideo, recordVideoPoll };

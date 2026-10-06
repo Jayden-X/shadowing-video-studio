@@ -1,8 +1,8 @@
-# 015 — Validate project speech consistently during monitoring
+# 015 — Validate project speech and video consistently during monitoring
 
 ## Goal
 
-Accept valid project-bound speech progress during submission, polling and explicit resume.
+Accept valid project-bound speech and video progress during submission, polling and explicit resume.
 
 ## Context
 
@@ -26,7 +26,7 @@ ADR 0004 and the existing project speech API contract.
 
 ## Out of scope
 
-Backend contracts, persistence changes, video monitoring, model inference and deployment.
+Backend contracts, persistence changes and unrelated generation features.
 
 ## Validation
 
@@ -88,3 +88,26 @@ uses two sentences with the backend's explicit null selection.
   **Speech is ready**, **10 of 10 current sentences have audio**, and enabled **Generate
   video**. Recovery read existing completed results without starting generation.
 - This is actual browser recovery evidence. No real synthesis or video export was rerun.
+
+### Project video monitoring — 2026-10-06
+
+The owner subsequently reported the same strict-schema mismatch in video polling.
+Read-only local API inspection confirmed a completed ten-sentence video with a registered
+asset and matching project/document/revision/token fields. Edge displayed invalid video
+progress and an available Resume video monitoring action. The owner authorized fixing
+the video counterpart; the same PR now covers both project media monitoring paths.
+
+Acceptance: submission, polling and token recovery use the same strict Project Video Job
+schema, reject mismatched metadata, and recover an existing output without resubmission.
+Implemented in `videoApi.ts` and `useVideo.ts`, with project-bound API/UI fixtures and
+regressions. Verification: video API/UI focused tests 10 passed; full frontend suite
+173 passed; TypeScript typecheck and production build passed. No backend logic changed.
+
+Updated the same local frontend, refreshed the owner's Edge page, reopened the saved
+project and clicked **Resume video monitoring**. The page showed **Video is ready.
+Preview it and download the MP4.**, enabled Generate video, and exposed the existing
+MP4 in preview/download and saved history. Ten of ten sentence audios remained available.
+No speech generation or video rendering was started during recovery verification.
+
+The testing standard now requires realistic project DTOs throughout submission/polling/
+recovery and multi-sentence recovery with backend optional-field encoding.
