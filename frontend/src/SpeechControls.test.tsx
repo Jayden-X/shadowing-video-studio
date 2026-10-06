@@ -180,7 +180,7 @@ describe("sentence speech UI", () => {
   it("recovers a saved Project Speech Job by submission token without submitting again", async () => {
     const fetchMock = mockSpeech((sentences, _force, _init, binding) => json(job(sentences, "running", firstAsset, binding), 202));
     const firstView = render(<App />);
-    await prepare("Hello.");
+    await prepare("Hello. Next.");
     await act(async () => { fireEvent.click(button("Generate speech")); });
     expect(button("Stop waiting for speech")).toBeTruthy();
     firstView.unmount();
@@ -193,7 +193,7 @@ describe("sentence speech UI", () => {
 
     expect(fetchMock.mock.calls.filter(([url]) => url === `/api/projects/${TEST_PROJECT_ID}/speech`)).toHaveLength(1);
     expect(fetchMock.mock.calls.filter(([url]) => url === `/api/projects/${TEST_PROJECT_ID}/attempts/${JSON.parse(window.localStorage.getItem("shadowing-video-studio.project-cache.v1") ?? "{}").pendingSubmissions?.[0]?.submissionToken}`)).toHaveLength(1);
-    expect(screen.getByText("Generating speech · 0 of 1 sentences ready")).toBeTruthy();
+    expect(screen.getByText("Generating speech · 0 of 2 sentences ready")).toBeTruthy();
     expect(screen.queryByRole("alert")).toBeNull();
     fireEvent.click(button("Stop waiting for speech"));
   });

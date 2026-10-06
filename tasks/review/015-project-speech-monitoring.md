@@ -68,3 +68,23 @@ GPT-6 Luna/max as required by the repository standards.
   `/api/health` returns `ok`, and speech status reports available. Requested opening the
   page in Codex. Real Qwen generation/browser workflow smoke was not rerun.
 - Ready for delivery review; remote CI and merge are not yet confirmed.
+
+### Edge recovery regression — 2026-10-06
+
+The owner reported `invalid speech attempt details` after the local frontend update.
+Native Edge inspection confirmed the error on a saved ten-sentence project. Read-only
+API inspection showed completed jobs with ten sentences and a frozen request containing
+`singleSentenceId: null`. No dialogue or user project payload is stored in this task.
+Recovery treated null as a whole-document selection, but its next length guard treated
+every value other than undefined as a single-sentence selection. The previous recovery
+test used only one sentence and missed this mismatch. The follow-up fix uses the same
+null/undefined predicate for selection and length checking; the recovery regression now
+uses two sentences with the backend's explicit null selection.
+
+- Follow-up validation: focused frontend tests 51 passed; full frontend suite 170 passed;
+  TypeScript typecheck, Vite production build and `git diff --check` passed.
+- Updated the same local service frontend. In the owner's Edge window, refreshed,
+  reopened the saved project and clicked **Resume speech monitoring**. The page showed
+  **Speech is ready**, **10 of 10 current sentences have audio**, and enabled **Generate
+  video**. Recovery read existing completed results without starting generation.
+- This is actual browser recovery evidence. No real synthesis or video export was rerun.

@@ -270,10 +270,11 @@ export function useSpeech() {
         return { id: sentence.id, text: sentence.text };
       });
       const selectedSentenceId = frozen.request.singleSentenceId;
-      const expectedSnapshot = selectedSentenceId === undefined || selectedSentenceId === null
+      const isSingleSentenceAttempt = selectedSentenceId !== undefined && selectedSentenceId !== null;
+      const expectedSnapshot = !isSingleSentenceAttempt
         ? attemptSnapshot
         : typeof selectedSentenceId === "string" ? attemptSnapshot.filter(({ id }) => id === selectedSentenceId) : [];
-      if (expectedSnapshot.length === 0 || (selectedSentenceId !== undefined && expectedSnapshot.length !== 1)) {
+      if (expectedSnapshot.length === 0 || (isSingleSentenceAttempt && expectedSnapshot.length !== 1)) {
         throw new SpeechApiError("The local service returned invalid speech attempt details.");
       }
       const binding: SpeechBinding = { voice: frozen.editor.voice,
